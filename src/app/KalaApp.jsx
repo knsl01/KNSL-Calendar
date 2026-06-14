@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useMemo } from "react";
 import { THEME_DEFS, buildPalette } from "@/lib/themes";
 import { loadState, saveState, clearState, migrateLocalToCloud } from "@/lib/storage";
 import { cloudEnabled } from "@/lib/supabase";
-import { sendMagicLink, getUser, onAuthChange, signOut } from "@/lib/auth";
+import { sendMagicLink, verifyEmailCode, getUser, onAuthChange, signOut } from "@/lib/auth";
 import { WEEKS_PER_YEAR, weeksBetween, fmt, currentWeekKey } from "@/lib/helpers";
 import {
   AREAS, PRIMARY_TABS, SECONDARY_TABS, LIFE_SEASONS, RELATIONS,
@@ -510,8 +510,11 @@ function KALAAudioButton({ audio }) {
 function AuthScreen({ onGuest, onSignedIn }) {
   const [email, setEmail] = useState("");
   const [sent, setSent] = useState(false);
+  const [code, setCode] = useState("");
+  const [verifying, setVerifying] = useState(false);
   const [err, setErr] = useState("");
   const valid = /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email);
+  const codeValid = /^\d{6}$/.test(code.trim());
 
   const signIn = async () => {
     if (!valid) return;
@@ -521,12 +524,28 @@ function AuthScreen({ onGuest, onSignedIn }) {
       onSignedIn(email.trim());
       return;
     }
-    // Real magic link: Supabase emails a one-tap login link.
+    // Email a 6-digit code (plus a backup link). The code is what makes
+    // sign-in work inside a home-screen PWA on iOS, where the link would
+    // otherwise open in Safari and leave the installed app logged out.
     setSent(true);
+    setCode("");
     const res = await sendMagicLink(email.trim());
     if (!res.ok) {
       setSent(false);
-      setErr(res.error || "Couldn't send the link. Try again.");
+      setErr(res.error || "Couldn't send the code. Try again.");
+    }
+  };
+
+  const verify = async () => {
+    if (!codeValid || verifying) return;
+    setErr("");
+    setVerifying(true);
+    const res = await verifyEmailCode(email.trim(), code);
+    setVerifying(false);
+    if (res.ok) {
+      onSignedIn(email.trim());
+    } else {
+      setErr(res.error || "That code didn't work. Check it and try again.");
     }
   };
 
@@ -563,15 +582,36 @@ function AuthScreen({ onGuest, onSignedIn }) {
             </p>
           </>
         ) : (
-          <div style={{ padding: "20px 0" }}>
+          <div style={{ padding: "20px 0", textAlign: "left" }}>
             <p style={{ fontFamily: "'Fraunces',serif", fontStyle: "italic", fontSize: 18,
-              color: C.soil, marginBottom: 10 }}>Check your inbox.</p>
-            <p style={{ fontSize: 14, color: C.soilSoft, lineHeight: 1.6 }}>
-              We sent a one-tap sign-in link to <strong>{email}</strong>. Open it on this
-              device to continue. You can close this tab.
+              color: C.soil, marginBottom: 10, textAlign: "center" }}>Check your inbox.</p>
+            <p style={{ fontSize: 14, color: C.soilSoft, lineHeight: 1.6, marginBottom: 18,
+              textAlign: "center" }}>
+              We sent a 6-digit code to <strong>{email}</strong>. Enter it below to sign in
+              — no need to leave this app.
             </p>
-            <Btn variant="ghost" small onClick={() => { setSent(false); }}
-              style={{ marginTop: 16 }}>Use a different email</Btn>
+            <div style={{ marginBottom: 10 }}>
+              <Input type="text" inputMode="numeric" autoComplete="one-time-code"
+                pattern="\d*" maxLength={6} placeholder="123456" value={code}
+                onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                onKeyDown={(e) => { if (e.key === "Enter") verify(); }}
+                style={{ textAlign: "center", letterSpacing: ".4em", fontSize: 20 }} />
+            </div>
+            <div style={{ display: "grid", gap: 10 }}>
+              <Btn onClick={verify} disabled={!codeValid || verifying}>
+                {verifying ? "Signing in…" : "Sign in"}
+              </Btn>
+            </div>
+            {err && <p style={{ fontSize: 12.5, color: C.clay, marginTop: 12,
+              textAlign: "center" }}>{err}</p>}
+            <p style={{ fontSize: 12, color: C.soilSoft, marginTop: 16, lineHeight: 1.5,
+              textAlign: "center" }}>
+              Opening on a desktop browser? The link in the email works too.
+            </p>
+            <div style={{ display: "flex", justifyContent: "center" }}>
+              <Btn variant="ghost" small onClick={() => { setSent(false); setCode(""); setErr(""); }}
+                style={{ marginTop: 12 }}>Use a different email</Btn>
+            </div>
           </div>
         )}
 
