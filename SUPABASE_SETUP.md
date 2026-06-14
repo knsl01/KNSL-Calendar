@@ -51,17 +51,36 @@ For local dev, copy `.env.example` → `.env` and paste the same two values.
    ```
    (The second one lets sign-in work during local development.)
 
-## 6. (Optional) Make the magic-link email on-brand
+## 6. (Required) Put the sign-in **code** in the email
 
-Supabase → **Authentication → Email Templates → Magic Link**. You can edit the
-copy to match KALA's voice ("Here's your one-tap sign-in for KALA…").
+KALA signs people in with a **6-digit code** they type into the app, not just
+a tappable link. This is essential: when KALA is added to the iOS home screen,
+it runs as a standalone app with its own storage. Tapping a magic link in an
+email always opens **Safari**, never the installed app — so the session lands
+in Safari and the home-screen app stays logged out. A code the user types in
+never leaves the app, so it works everywhere.
+
+For the code to appear in the email:
+
+1. Supabase → **Authentication → Email Templates → Magic Link**.
+2. Make sure the template includes the token, e.g.:
+   ```html
+   <h2>Your KALA sign-in code</h2>
+   <p>Enter this code in the app to sign in:</p>
+   <p style="font-size:28px;letter-spacing:6px;"><strong>{{ .Token }}</strong></p>
+   <p>Or, on a desktop browser, you can tap this link instead:</p>
+   <p><a href="{{ .ConfirmationURL }}">Sign in to KALA</a></p>
+   ```
+   The `{{ .Token }}` is the 6-digit code. Keep `{{ .ConfirmationURL }}` too —
+   it's a handy fallback when the email is opened in the same browser.
 
 ---
 
 ## How it behaves once connected
 
-- **New visitor** → enters email → gets a magic link → taps it → signed in,
-  data syncs to the cloud and follows them to any device.
+- **New visitor** → enters email → gets a 6-digit code → types it into the app
+  → signed in, data syncs to the cloud and follows them to any device. (The
+  link in the email still works as a fallback on desktop.)
 - **Existing guest** → when they sign in for the first time, whatever they
   created on the device is lifted up to the cloud automatically (nothing lost).
 - **No keys set** → the app silently stays in guest mode. Nothing breaks.
