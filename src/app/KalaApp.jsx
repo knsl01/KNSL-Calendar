@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { THEME_DEFS, buildPalette } from "@/lib/themes";
-import { loadState, saveState, clearState } from "@/lib/storage";
+import { loadState, saveState, clearState, migrateLocalToCloud } from "@/lib/storage";
+import { cloudEnabled } from "@/lib/supabase";
+import { sendMagicLink, getUser, onAuthChange, signOut } from "@/lib/auth";
 import { WEEKS_PER_YEAR, weeksBetween, fmt, currentWeekKey } from "@/lib/helpers";
 import {
   AREAS, PRIMARY_TABS, SECONDARY_TABS, LIFE_SEASONS, RELATIONS,
@@ -219,10 +221,19 @@ export default function KalaApp() {
   const [lastSeenWeek, setLastSeenWeek] = useState(null);
   const [people, setPeople] = useState([]); // [{id,name,relation,theirAge,theirLifeExp,perYear}]
 
-  // load once on mount
+  // load once on mount — and react to Supabase sign-in (magic-link return)
   useEffect(() => {
-    (async () => {
+    let active = true;
+
+    const bootstrap = async () => {
+      // If returning from a magic link, a session now exists.
+      const user = cloudEnabled ? await getUser() : null;
+      if (user) {
+        await migrateLocalToCloud();      // first sign-in: lift local data up
+        if (active) setAccount({ email: user.email });
+      }
       const saved = await loadState();
+      if (!active) return;
       if (saved && saved.profile?.birth) {
         setProfile(saved.profile);
         setPlans(saved.plans?.length ? saved.plans : [{ id: 1, name: "Plan A", steps: [] }]);
@@ -237,10 +248,30 @@ export default function KalaApp() {
         if (saved.lang) setLang(saved.lang);
         if (saved.account) setAccount(saved.account);
         setStage("app"); // skip onboarding — welcome back
+      } else if (user) {
+        // Signed in but no saved life yet → start onboarding
+        setStage("welcome");
       } else {
         setStage("auth");
       }
-    })();
+    };
+    bootstrap();
+
+    // React to auth changes (e.g. magic-link completes in this tab)
+    const unsub = onAuthChange(async (user) => {
+      if (!active || !user) return;
+      await migrateLocalToCloud();
+      setAccount({ email: user.email });
+      const saved = await loadState();
+      if (saved && saved.profile?.birth) {
+        setProfile(saved.profile);
+        setStage("app");
+      } else {
+        setStage((s) => (s === "auth" ? "welcome" : s));
+      }
+    });
+
+    return () => { active = false; unsub(); };
   }, []);
 
   // autosave (debounced) whenever data changes while in app
@@ -479,14 +510,24 @@ function KALAAudioButton({ audio }) {
 function AuthScreen({ onGuest, onSignedIn }) {
   const [email, setEmail] = useState("");
   const [sent, setSent] = useState(false);
+  const [err, setErr] = useState("");
   const valid = /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email);
 
-  // When Supabase is connected, replace this with supabase.auth.signInWithOtp({ email })
-  const signIn = () => {
+  const signIn = async () => {
     if (!valid) return;
+    setErr("");
+    // If cloud isn't configured yet, behave like a local sign-in (no email step).
+    if (!cloudEnabled) {
+      onSignedIn(email.trim());
+      return;
+    }
+    // Real magic link: Supabase emails a one-tap login link.
     setSent(true);
-    // Demo: proceed locally after a beat. In production, wait for magic-link callback.
-    setTimeout(() => onSignedIn(email.trim()), 900);
+    const res = await sendMagicLink(email.trim());
+    if (!res.ok) {
+      setSent(false);
+      setErr(res.error || "Couldn't send the link. Try again.");
+    }
   };
 
   return (
@@ -516,6 +557,7 @@ function AuthScreen({ onGuest, onSignedIn }) {
               <Btn onClick={signIn} disabled={!valid}>Continue with email</Btn>
               <Btn variant="ghost" onClick={onGuest}>Continue as guest</Btn>
             </div>
+            {err && <p style={{ fontSize: 12.5, color: C.clay, marginTop: 12 }}>{err}</p>}
             <p style={{ fontSize: 11.5, color: C.soilSoft, marginTop: 16, lineHeight: 1.5 }}>
               Guest data is saved on this device only. Sign in later from Settings to sync.
             </p>
@@ -523,7 +565,13 @@ function AuthScreen({ onGuest, onSignedIn }) {
         ) : (
           <div style={{ padding: "20px 0" }}>
             <p style={{ fontFamily: "'Fraunces',serif", fontStyle: "italic", fontSize: 18,
-              color: C.soil }}>Signing you in…</p>
+              color: C.soil, marginBottom: 10 }}>Check your inbox.</p>
+            <p style={{ fontSize: 14, color: C.soilSoft, lineHeight: 1.6 }}>
+              We sent a one-tap sign-in link to <strong>{email}</strong>. Open it on this
+              device to continue. You can close this tab.
+            </p>
+            <Btn variant="ghost" small onClick={() => { setSent(false); }}
+              style={{ marginTop: 16 }}>Use a different email</Btn>
           </div>
         )}
 
