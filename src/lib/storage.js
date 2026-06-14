@@ -1,21 +1,25 @@
 // ============================================================
 // KALA — Storage layer
 // ------------------------------------------------------------
-// A single, swappable persistence interface. Today it uses a
-// browser-backed key/value store (window.storage in the host,
-// localStorage as a fallback). When you're ready for cloud sync,
-// implement the same three functions against Supabase and nothing
-// else in the app has to change.
+// One swappable persistence interface used by the whole app:
+//   loadState() / saveState(state) / clearState()
+//
+// Behaviour:
+//   - Signed in (Supabase user present) -> cloud sync via the
+//     `states` table (one row per user, RLS-protected).
+//   - Guest / cloud not configured       -> on-device storage
+//     (window.storage in the artifact host, else localStorage).
+//
+// Nothing else in the app needs to know which path is active.
 // ============================================================
+import { supabase, cloudEnabled } from "./supabase";
 
 const STORE_KEY = "kala-state-v1";
 
-// In Anthropic's artifact host, window.storage exists. In a normal
-// browser (Vercel), we fall back to localStorage with the same shape.
-function backend() {
+// ---------- local (guest) backend ----------
+function localBackend() {
   if (typeof window === "undefined") return null;
-  if (window.storage) return window.storage;
-  // localStorage shim matching window.storage's async-ish API
+  if (window.storage) return window.storage; // artifact host
   return {
     async get(k) {
       const v = window.localStorage.getItem(k);
@@ -33,19 +37,55 @@ function backend() {
   };
 }
 
+async function currentUser() {
+  if (!cloudEnabled) return null;
+  const { data } = await supabase.auth.getUser();
+  return data?.user ?? null;
+}
+
+// ---------- public API ----------
 export async function loadState() {
-  const store = backend();
+  const user = await currentUser();
+  if (user) {
+    try {
+      const { data, error } = await supabase
+        .from("states")
+        .select("data")
+        .eq("user_id", user.id)
+        .maybeSingle();
+      if (error) throw error;
+      return data?.data ?? null;
+    } catch (e) {
+      console.error("KALA cloud load failed, falling back local", e);
+    }
+  }
+  const store = localBackend();
   if (!store) return null;
   try {
     const res = await store.get(STORE_KEY);
     return res ? JSON.parse(res.value) : null;
   } catch {
-    return null; // key missing or parse error → fresh start
+    return null;
   }
 }
 
 export async function saveState(state) {
-  const store = backend();
+  const user = await currentUser();
+  if (user) {
+    try {
+      const { error } = await supabase
+        .from("states")
+        .upsert(
+          { user_id: user.id, data: state, updated_at: new Date().toISOString() },
+          { onConflict: "user_id" }
+        );
+      if (error) throw error;
+      return;
+    } catch (e) {
+      console.error("KALA cloud save failed, saving local", e);
+    }
+  }
+  const store = localBackend();
   if (!store) return;
   try {
     await store.set(STORE_KEY, JSON.stringify(state));
@@ -55,7 +95,15 @@ export async function saveState(state) {
 }
 
 export async function clearState() {
-  const store = backend();
+  const user = await currentUser();
+  if (user) {
+    try {
+      await supabase.from("states").delete().eq("user_id", user.id);
+    } catch (e) {
+      console.error("KALA cloud clear failed", e);
+    }
+  }
+  const store = localBackend();
   if (!store) return;
   try {
     await store.delete(STORE_KEY);
@@ -64,20 +112,28 @@ export async function clearState() {
   }
 }
 
-// ------------------------------------------------------------
-// SUPABASE MIGRATION (when ready):
-//   import { createClient } from "@supabase/supabase-js";
-//   const sb = createClient(
-//     import.meta.env.VITE_SUPABASE_URL,
-//     import.meta.env.VITE_SUPABASE_ANON_KEY
-//   );
-//   export async function loadState() {
-//     const { data: { user } } = await sb.auth.getUser();
-//     if (!user) return null;
-//     const { data } = await sb.from("states")
-//       .select("data").eq("user_id", user.id).single();
-//     return data?.data ?? null;
-//   }
-//   ...same for saveState / clearState (upsert / delete by user_id).
-// Keep this interface identical and the rest of the app won't change.
-// ------------------------------------------------------------
+// ---------- migration helper ----------
+// When a guest signs in for the first time, copy their on-device
+// data up to the cloud so nothing is lost.
+export async function migrateLocalToCloud() {
+  if (!cloudEnabled) return;
+  const user = await currentUser();
+  if (!user) return;
+  const store = localBackend();
+  if (!store) return;
+  try {
+    const res = await store.get(STORE_KEY);
+    const local = res ? JSON.parse(res.value) : null;
+    if (!local) return;
+    const { data } = await supabase
+      .from("states")
+      .select("user_id")
+      .eq("user_id", user.id)
+      .maybeSingle();
+    if (!data) {
+      await supabase.from("states").insert({ user_id: user.id, data: local });
+    }
+  } catch {
+    /* best-effort */
+  }
+}
