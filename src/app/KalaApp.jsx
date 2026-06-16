@@ -1310,7 +1310,7 @@ function LifeView({ profile, lived, total, remaining, age, pct, milestoneWeeks, 
       {/* gentle framing — these are possibilities, not verdicts */}
       <p style={{ fontSize: 12.5, color: C.soilSoft, marginBottom: 24, lineHeight: 1.5, fontStyle: "italic",
         fontFamily: "'Fraunces',serif" }}>
-        {tr("These numbers assume a long life", lang)} — {tr("they're a gentle estimate, not a promise. The point isn't how much time is left, but how you choose to spend it.", lang)}
+        {tr("A gentle estimate, not a promise — what matters is how you spend it.", lang)}
       </p>
 
       {/* plan switcher */}
