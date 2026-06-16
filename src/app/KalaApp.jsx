@@ -5,7 +5,8 @@ import { cloudEnabled } from "@/lib/supabase";
 import { sendMagicLink, verifyEmailCode, getUser, onAuthChange, signOut } from "@/lib/auth";
 import { WEEKS_PER_YEAR, weeksBetween, fmt, currentWeekKey } from "@/lib/helpers";
 import {
-  AREAS, PRIMARY_TABS, SECONDARY_TABS, LIFE_SEASONS, RELATIONS,
+  AREAS, LIFE_SEASONS, RELATIONS,
+  ALL_TABS, DEFAULT_MENU, tabByKey, sanitizeMenu,
   WEEKLY_PROMPTS, weekPromptIndex,
   WRAPPED_THEMES, WRAPPED_HEADLINES, WRAPPED_CAPTIONS, WRAPPED_QUOTES,
 } from "@/lib/constants";
@@ -221,6 +222,10 @@ export default function KalaApp() {
   const [lastSeenWeek, setLastSeenWeek] = useState(null);
   const [people, setPeople] = useState([]); // [{id,name,relation,theirAge,theirLifeExp,perYear}]
   const [countdowns, setCountdowns] = useState([]); // [{id,title,date}]
+  // which tabs appear in the top navigation — fully customisable by the user
+  const [menuTabs, setMenuTabsRaw] = useState(DEFAULT_MENU);
+  const setMenuTabs = (next) => setMenuTabsRaw((prev) =>
+    sanitizeMenu(typeof next === "function" ? next(prev) : next));
 
   // load once on mount — and react to Supabase sign-in (magic-link return)
   useEffect(() => {
@@ -244,6 +249,7 @@ export default function KalaApp() {
         setWeekly(saved.weekly || {});
         setPeople(saved.people || []);
         setCountdowns(saved.countdowns || []);
+        if (saved.menuTabs) setMenuTabs(saved.menuTabs);
         setLastSeenWeek(saved.lastSeenWeek || null);
         if (saved.theme) setTheme(saved.theme);
         if (saved.dark) setDark(saved.dark);
@@ -282,10 +288,10 @@ export default function KalaApp() {
     if (stage !== "app") return;
     clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => {
-      saveState({ profile, plans, activePlan, memories, diary, weekly, lastSeenWeek, people, countdowns, theme, dark, lang, account });
+      saveState({ profile, plans, activePlan, memories, diary, weekly, lastSeenWeek, people, countdowns, menuTabs, theme, dark, lang, account });
     }, 600);
     return () => clearTimeout(saveTimer.current);
-  }, [stage, profile, plans, activePlan, memories, diary, weekly, lastSeenWeek, people, countdowns, theme, dark, lang, account]);
+  }, [stage, profile, plans, activePlan, memories, diary, weekly, lastSeenWeek, people, countdowns, menuTabs, theme, dark, lang, account]);
 
   const resetAll = async () => {
     await clearState();
@@ -293,6 +299,7 @@ export default function KalaApp() {
     setPlans([{ id: 1, name: "Plan A", steps: [] }]);
     setActivePlan(1);
     setMemories([]); setDiary([]); setWeekly({}); setPeople([]); setCountdowns([]);
+    setMenuTabs(DEFAULT_MENU);
     setAccount(null);
     setStage("auth");
   };
@@ -347,6 +354,7 @@ export default function KalaApp() {
           lastSeenWeek={lastSeenWeek} setLastSeenWeek={setLastSeenWeek}
           people={people} setPeople={setPeople}
           countdowns={countdowns} setCountdowns={setCountdowns}
+          menuTabs={menuTabs} setMenuTabs={setMenuTabs}
           theme={theme} setTheme={setTheme} dark={dark} setDark={setDark} lang={lang} setLang={setLang}
           onReset={resetAll} />
       )}
@@ -920,8 +928,8 @@ function Reveal({ profile, onDone }) {
 function Main({ profile, setProfile, plans, setPlans, activePlan, setActivePlan,
   memories, setMemories, diary, setDiary, weekly, setWeekly,
   lastSeenWeek, setLastSeenWeek, people, setPeople, countdowns, setCountdowns,
-  theme, setTheme, dark, setDark, lang, setLang, onReset }) {
-  const [tab, setTab] = useState("life");
+  menuTabs, setMenuTabs, theme, setTheme, dark, setDark, lang, setLang, onReset }) {
+  const [tab, setTab] = useState(menuTabs[0] || "life");
   const [drawer, setDrawer] = useState(false);
   const audio = useKALAAudio();
 
@@ -935,7 +943,7 @@ function Main({ profile, setProfile, plans, setPlans, activePlan, setActivePlan,
   // ---- export / import all data (trust & portability) ----
   const exportData = () => {
     const payload = { _app: "KALA", _v: 1, exportedAt: new Date().toISOString(),
-      profile, plans, activePlan, memories, diary, weekly, people, countdowns };
+      profile, plans, activePlan, memories, diary, weekly, people, countdowns, menuTabs };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -954,6 +962,7 @@ function Main({ profile, setProfile, plans, setPlans, activePlan, setActivePlan,
       if (d.weekly) setWeekly(d.weekly);
       if (d.people) setPeople(d.people);
       if (d.countdowns) setCountdowns(d.countdowns);
+      if (d.menuTabs) setMenuTabs(d.menuTabs);
       return true;
     } catch { return false; }
   };
@@ -1018,13 +1027,17 @@ function Main({ profile, setProfile, plans, setPlans, activePlan, setActivePlan,
     return map;
   }, [roadmap, lived]);
 
-  const isSecondary = SECONDARY_TABS.some((t) => t.key === tab);
-  const activeLabel = [...PRIMARY_TABS, ...SECONDARY_TABS].find((t) => t.key === tab)?.label;
+  // Tabs the user has pinned to the top bar (in their chosen order),
+  // plus a flag for when the active view lives outside that menu.
+  const navTabs = menuTabs.map(tabByKey).filter(Boolean);
+  const isSecondary = !menuTabs.includes(tab);
+  const activeLabel = tabByKey(tab)?.label;
 
   return (
     <div style={{ maxWidth: 1080, margin: "0 auto", padding: "0 20px 80px" }}>
       {/* top bar */}
-      <header style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "22px 0" }}>
+      <header style={{ display: "flex", justifyContent: "space-between", alignItems: "center",
+        padding: "22px 0", flexWrap: "wrap", rowGap: 12, columnGap: 14 }}>
         <button onClick={() => setDrawer(true)} className="kBtn"
           style={{ display: "flex", alignItems: "center", gap: 11, fontWeight: 700,
             letterSpacing: ".18em", background: "transparent", border: "none", cursor: "pointer",
@@ -1033,10 +1046,12 @@ function Main({ profile, setProfile, plans, setPlans, activePlan, setActivePlan,
           <Glyph small /> KALA
           <span style={{ fontSize: 11, color: C.soilSoft, letterSpacing: 0, marginLeft: 2 }}>▾</span>
         </button>
-        <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap",
+          justifyContent: "flex-end" }}>
           <LiveClock lang={lang} />
           <KALAAudioButton audio={audio} />
-          <div style={{ fontSize: 13, color: C.soilSoft }}>
+          <div style={{ fontSize: 13, color: C.soilSoft, whiteSpace: "nowrap", maxWidth: 160,
+            overflow: "hidden", textOverflow: "ellipsis" }}>
             Hi, {profile.name || "friend"}
           </div>
         </div>
@@ -1045,15 +1060,15 @@ function Main({ profile, setProfile, plans, setPlans, activePlan, setActivePlan,
       {/* primary tabs only */}
       <div style={{ display: "flex", gap: 8, marginBottom: 28, borderBottom: `1px solid ${C.line}`,
         flexWrap: "wrap", alignItems: "center" }}>
-        {PRIMARY_TABS.map((tb) => (
+        {navTabs.map((tb) => (
           <Tab key={tb.key} active={tab === tb.key} onClick={() => setTab(tb.key)}>{tr(tb.label, lang)}</Tab>
         ))}
-        {/* if a secondary tab is active, show it as a pill so user isn't lost */}
+        {/* if the active view isn't pinned to the menu, show it as a pill so user isn't lost */}
         {isSecondary && (
           <span style={{ marginLeft: "auto", fontSize: 12.5, color: C.clay, fontWeight: 600,
             display: "flex", alignItems: "center", gap: 6 }}>
-            {activeLabel}
-            <button onClick={() => setTab("life")} className="kBtn" style={{ background: "transparent",
+            {tr(activeLabel, lang)}
+            <button onClick={() => setTab(menuTabs[0] || "life")} className="kBtn" style={{ background: "transparent",
               border: "none", color: C.soilSoft, cursor: "pointer", fontSize: 15, padding: 0 }}>×</button>
           </span>
         )}
@@ -1116,6 +1131,7 @@ function Main({ profile, setProfile, plans, setPlans, activePlan, setActivePlan,
       {drawer && (
         <Drawer profile={profile} onClose={() => setDrawer(false)}
           tab={tab} setTab={(tk) => { setTab(tk); setDrawer(false); }}
+          menuTabs={menuTabs} setMenuTabs={setMenuTabs}
           lang={lang} onReset={onReset} />
       )}
 
@@ -1137,8 +1153,25 @@ function Main({ profile, setProfile, plans, setPlans, activePlan, setActivePlan,
   );
 }
 
-function Drawer({ profile, onClose, tab, setTab, lang, onReset }) {
+function Drawer({ profile, onClose, tab, setTab, menuTabs, setMenuTabs, lang, onReset }) {
   const [confirmReset, setConfirmReset] = useState(false);
+  const [editing, setEditing] = useState(false);
+
+  // tabs pinned to the top bar (in order) vs. everything else
+  const inMenu = menuTabs.map(tabByKey).filter(Boolean);
+  const moreTabs = ALL_TABS.filter((t) => !menuTabs.includes(t.key));
+
+  const pin = (key) => setMenuTabs((prev) => [...prev, key]);
+  const unpin = (key) => setMenuTabs((prev) => prev.filter((k) => k !== key));
+  const move = (key, dir) => setMenuTabs((prev) => {
+    const i = prev.indexOf(key);
+    const j = i + dir;
+    if (i < 0 || j < 0 || j >= prev.length) return prev;
+    const next = [...prev];
+    [next[i], next[j]] = [next[j], next[i]];
+    return next;
+  });
+
   return (
     <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 50,
       background: "rgba(46,32,24,.34)", animation: "kFadeIn .25s ease",
@@ -1158,17 +1191,39 @@ function Drawer({ profile, onClose, tab, setTab, lang, onReset }) {
             fontSize: 22, color: C.soilSoft, cursor: "pointer" }}>×</button>
         </div>
 
-        <div style={{ fontSize: 11, letterSpacing: ".2em", textTransform: "uppercase",
-          color: C.soilSoft, fontWeight: 600, marginBottom: 12 }}>{tr("Main", lang)}</div>
-        {PRIMARY_TABS.map((tb) => (
-          <DrawerItem key={tb.key} label={tr(tb.label, lang)} active={tab === tb.key} onClick={() => setTab(tb.key)} />
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+          <div style={{ fontSize: 11, letterSpacing: ".2em", textTransform: "uppercase",
+            color: C.soilSoft, fontWeight: 600 }}>{tr("Main", lang)}</div>
+          <button onClick={() => setEditing((e) => !e)} className="kBtn"
+            style={{ background: "transparent", border: "none", cursor: "pointer", fontFamily: "inherit",
+              fontSize: 12, fontWeight: 600, color: editing ? C.clay : C.soilSoft, padding: 0 }}>
+            {editing ? tr("Done", lang) : tr("Edit menu", lang)}
+          </button>
+        </div>
+        {editing && (
+          <p style={{ fontSize: 11.5, color: C.soilSoft, lineHeight: 1.5, margin: "0 0 12px" }}>
+            {tr("Choose what shows in your top bar — pin, remove, or reorder.", lang)}
+          </p>
+        )}
+        {inMenu.map((tb, i) => (
+          <DrawerItem key={tb.key} label={tr(tb.label, lang)} desc={editing ? tr(tb.desc, lang) : undefined}
+            active={tab === tb.key} onClick={() => !editing && setTab(tb.key)}
+            editing={editing} pinned
+            canUp={i > 0} canDown={i < inMenu.length - 1}
+            canUnpin={inMenu.length > 1}
+            onUp={() => move(tb.key, -1)} onDown={() => move(tb.key, 1)}
+            onUnpin={() => unpin(tb.key)} />
         ))}
 
-        <div style={{ fontSize: 11, letterSpacing: ".2em", textTransform: "uppercase",
-          color: C.soilSoft, fontWeight: 600, margin: "22px 0 12px" }}>{tr("More", lang)}</div>
-        {SECONDARY_TABS.map((tb) => (
-          <DrawerItem key={tb.key} label={tr(tb.label, lang)} desc={tb.desc}
-            active={tab === tb.key} onClick={() => setTab(tb.key)} />
+        {moreTabs.length > 0 && (
+          <div style={{ fontSize: 11, letterSpacing: ".2em", textTransform: "uppercase",
+            color: C.soilSoft, fontWeight: 600, margin: "22px 0 12px" }}>{tr("More", lang)}</div>
+        )}
+        {moreTabs.map((tb) => (
+          <DrawerItem key={tb.key} label={tr(tb.label, lang)} desc={tr(tb.desc, lang)}
+            active={tab === tb.key} onClick={() => !editing && setTab(tb.key)}
+            editing={editing} pinned={false}
+            onPin={() => pin(tb.key)} />
         ))}
 
         <div style={{ marginTop: 30, paddingTop: 20, borderTop: `1px solid ${C.line}`,
@@ -1213,17 +1268,45 @@ function Drawer({ profile, onClose, tab, setTab, lang, onReset }) {
   );
 }
 
-function DrawerItem({ label, desc, active, onClick }) {
+function DrawerItem({ label, desc, active, onClick, editing, pinned,
+  canUp, canDown, canUnpin, onUp, onDown, onUnpin, onPin }) {
+  const iconBtn = (label2, on, disabled, extra = {}) => ({
+    background: "transparent", border: `1px solid ${C.line}`, borderRadius: 8,
+    width: 28, height: 28, lineHeight: "1", display: "flex", alignItems: "center",
+    justifyContent: "center", cursor: disabled ? "default" : "pointer", fontFamily: "inherit",
+    fontSize: 14, fontWeight: 700, color: disabled ? C.line : (on ? C.clay : C.soilSoft),
+    opacity: disabled ? 0.5 : 1, padding: 0, ...extra,
+  });
   return (
-    <button onClick={onClick} className="kBtn" style={{
-      display: "block", width: "100%", textAlign: "left", padding: "12px 14px", marginBottom: 4,
-      borderRadius: 12, border: "none", cursor: "pointer", fontFamily: "inherit",
-      background: active ? C.paper : "transparent",
-      boxShadow: active ? `inset 0 0 0 1px ${C.line}` : "none",
+    <div style={{
+      display: "flex", alignItems: "center", gap: 8, padding: "10px 12px", marginBottom: 4,
+      borderRadius: 12,
+      background: active && !editing ? C.paper : "transparent",
+      boxShadow: active && !editing ? `inset 0 0 0 1px ${C.line}` : "none",
     }}>
-      <div style={{ fontSize: 15, fontWeight: 600, color: active ? C.clay : C.soil }}>{label}</div>
-      {desc && <div style={{ fontSize: 12, color: C.soilSoft, marginTop: 2 }}>{desc}</div>}
-    </button>
+      <button onClick={onClick} className="kBtn" disabled={editing} style={{
+        flex: 1, textAlign: "left", padding: 0, background: "transparent", border: "none",
+        cursor: editing ? "default" : "pointer", fontFamily: "inherit",
+      }}>
+        <div style={{ fontSize: 15, fontWeight: 600, color: active && !editing ? C.clay : C.soil }}>{label}</div>
+        {desc && <div style={{ fontSize: 12, color: C.soilSoft, marginTop: 2 }}>{desc}</div>}
+      </button>
+
+      {editing && pinned && (
+        <div style={{ display: "flex", gap: 6 }}>
+          <button onClick={onUp} disabled={!canUp} className="kBtn" style={iconBtn("up", false, !canUp)} title="Move up">↑</button>
+          <button onClick={onDown} disabled={!canDown} className="kBtn" style={iconBtn("down", false, !canDown)} title="Move down">↓</button>
+          <button onClick={onUnpin} disabled={!canUnpin} className="kBtn"
+            style={iconBtn("remove", false, !canUnpin, { borderColor: canUnpin ? C.clay : C.line, color: canUnpin ? C.clay : C.line })}
+            title="Remove from menu">−</button>
+        </div>
+      )}
+      {editing && !pinned && (
+        <button onClick={onPin} className="kBtn"
+          style={iconBtn("add", true, false, { width: "auto", padding: "0 12px", borderColor: C.clay, color: C.clay, gap: 4 })}
+          title="Add to menu">+</button>
+      )}
+    </div>
   );
 }
 
@@ -3517,11 +3600,11 @@ function LiveClock({ lang }) {
   return (
     <div title={now.toLocaleString(locale)} aria-label={`${dateStr} ${timeStr}`}
       style={{ display: "flex", flexDirection: "column", alignItems: "flex-end",
-        lineHeight: 1.15, userSelect: "none" }}>
+        lineHeight: 1.15, userSelect: "none", whiteSpace: "nowrap" }}>
       <span style={{ fontFamily: "'Fraunces',serif", fontSize: 15, fontWeight: 600,
-        letterSpacing: ".01em", color: C.soil }}>{timeStr}</span>
-      <span style={{ fontSize: 10, letterSpacing: ".1em", textTransform: "uppercase",
-        color: C.soilSoft, marginTop: 1 }}>{dateStr}</span>
+        letterSpacing: ".01em", color: C.soil, whiteSpace: "nowrap" }}>{timeStr}</span>
+      <span style={{ fontSize: 10, letterSpacing: ".08em", textTransform: "uppercase",
+        color: C.soilSoft, marginTop: 2, whiteSpace: "nowrap" }}>{dateStr}</span>
     </div>
   );
 }

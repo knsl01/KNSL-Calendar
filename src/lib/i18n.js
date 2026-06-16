@@ -37,6 +37,19 @@ export const I18N = {
     "This week": "Minggu ini", "Lived": "Dijalani", "Ahead": "Masih ada",
     "Active plan": "Rencana aktif", "Manage plans →": "Kelola rencana →",
     "Main": "Utama", "More": "Lainnya",
+    "Edit menu": "Ubah menu", "Done": "Selesai",
+    "Choose what shows in your top bar — pin, remove, or reorder.":
+      "Pilih apa yang muncul di bar atas — sematkan, hapus, atau ubah urutan.",
+    "This week, one thing": "Minggu ini, satu hal",
+    "Design your roadmap": "Rancang peta jalanmu",
+    "Play out the what-ifs": "Mainkan skenario",
+    "Your month at a glance": "Bulananmu sekilas",
+    "Count down to what matters": "Hitung mundur ke yang penting",
+    "The moments you have left together": "Momen yang tersisa bersama",
+    "Mark the moments that shaped you": "Tandai momen yang membentukmu",
+    "Write this week's page": "Tulis halaman minggu ini",
+    "Your year, shareable": "Tahunmu, bisa dibagikan",
+    "Profile, appearance, language": "Profil, tampilan, bahasa",
   },
 };
 export function tr(s, lang) {

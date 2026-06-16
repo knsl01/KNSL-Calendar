@@ -10,10 +10,10 @@ export const AREAS = [
 
 
 export const PRIMARY_TABS = [
-  { key: "life", label: "Life" },
-  { key: "reflect", label: "Reflect" },
-  { key: "architect", label: "Plans" },
-  { key: "simulate", label: "Simulate" },
+  { key: "life", label: "Life", desc: "Your life in weeks" },
+  { key: "reflect", label: "Reflect", desc: "This week, one thing" },
+  { key: "architect", label: "Plans", desc: "Design your roadmap" },
+  { key: "simulate", label: "Simulate", desc: "Play out the what-ifs" },
 ];
 export const SECONDARY_TABS = [
   { key: "calendar", label: "Calendar", desc: "Your month at a glance" },
@@ -24,6 +24,25 @@ export const SECONDARY_TABS = [
   { key: "wrapped", label: "Wrapped", desc: "Your year, shareable" },
   { key: "settings", label: "Settings", desc: "Profile, appearance, language" },
 ];
+
+// Every tab the app knows about, in a single registry — used by the
+// customisable main menu so users can pin/unpin any of them.
+export const ALL_TABS = [...PRIMARY_TABS, ...SECONDARY_TABS];
+
+// The keys shown in the top navigation by default (a fresh install).
+export const DEFAULT_MENU = PRIMARY_TABS.map((t) => t.key);
+
+// Look up a tab's metadata by key.
+export function tabByKey(key) {
+  return ALL_TABS.find((t) => t.key === key) || null;
+}
+
+// Keep a saved menu sane: only known keys, no duplicates, never empty.
+export function sanitizeMenu(keys) {
+  const valid = (Array.isArray(keys) ? keys : [])
+    .filter((k, i, arr) => tabByKey(k) && arr.indexOf(k) === i);
+  return valid.length ? valid : [...DEFAULT_MENU];
+}
 
 export const LIFE_SEASONS = [
   { from: 0, to: 18, label: "Childhood", tint: "rgba(122,147,89,0.10)" },
