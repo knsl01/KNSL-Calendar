@@ -3540,19 +3540,25 @@ function useNow(intervalMs = 1000) {
   return now;
 }
 
-// Quiet real-time date + clock. A single, self-contained line under the header
-// so it's clearly visible (it ticks) without crowding the brand or greeting.
+// Quiet real-time date + clock. A minimalist, left-aligned block under the
+// header: the time leads, the date sits beneath it in an abbreviated, low-key
+// form so it never crowds the brand or greeting.
 function LiveDateBar({ lang }) {
   const now = useNow(1000);
   const locale = lang === "id" ? "id-ID" : "en-US";
-  const dateStr = now.toLocaleDateString(locale, { weekday: "long", day: "numeric", month: "long", year: "numeric" });
+  // Short, uncluttered date — "Mon, 16 Jun" rather than the full long form.
+  const dateStr = now.toLocaleDateString(locale, { weekday: "short", day: "numeric", month: "short" });
   const timeStr = now.toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" });
+  const fullDate = now.toLocaleDateString(locale, { weekday: "long", day: "numeric", month: "long", year: "numeric" });
   return (
-    <div aria-label={`${dateStr} ${timeStr}`} style={{ display: "flex", alignItems: "baseline",
-      justifyContent: "flex-start", gap: 6, margin: "-6px 0 16px", userSelect: "none" }}>
-      <span style={{ fontSize: 12, color: C.soilSoft, letterSpacing: ".02em", whiteSpace: "nowrap",
-        overflow: "hidden", textOverflow: "ellipsis" }}>
-        {dateStr} · <span style={{ fontVariantNumeric: "tabular-nums" }}>{timeStr}</span>
+    <div aria-label={`${fullDate} ${timeStr}`} style={{ display: "flex", flexDirection: "column",
+      alignItems: "flex-start", lineHeight: 1.1, margin: "-6px 0 16px", userSelect: "none" }}>
+      <span style={{ fontSize: 18, fontWeight: 600, color: C.soil, letterSpacing: ".01em",
+        fontVariantNumeric: "tabular-nums" }}>
+        {timeStr}
+      </span>
+      <span style={{ fontSize: 11, color: C.soilSoft, letterSpacing: ".04em", textTransform: "lowercase" }}>
+        {dateStr}
       </span>
     </div>
   );
