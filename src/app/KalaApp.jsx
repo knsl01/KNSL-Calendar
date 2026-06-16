@@ -371,11 +371,14 @@ function parseShareHash() {
 // Generative ambient music — warm drone + sparse piano notes (Ólafur Arnalds style)
 // No external files needed. Runs entirely in the browser via Web Audio API.
 
+// All scales are C-major-pentatonic (C D E G A) in different registers. Major
+// pentatonic has no semitone clashes, so every note sits consonantly over the
+// C drone — warm and calming rather than tense or melancholic.
 const KALA_SCALES = {
-  default:  [261.63, 293.66, 329.63, 349.23, 392.00, 440.00, 493.88, 523.25], // C major pentatonic feel
-  reflect:  [261.63, 311.13, 349.23, 392.00, 466.16, 523.25],                  // C minor (introspective)
-  wrapped:  [220.00, 261.63, 329.63, 392.00, 440.00, 523.25],                  // warmer, lower
-  simulate: [277.18, 311.13, 370.00, 415.30, 466.16],                          // Dm feel (contemplative)
+  default:  [261.63, 293.66, 329.63, 392.00, 440.00, 523.25],          // C4 pentatonic
+  reflect:  [196.00, 220.00, 261.63, 293.66, 329.63],                  // lower, warm
+  wrapped:  [196.00, 261.63, 293.66, 329.63, 392.00],                  // mid, rounded
+  simulate: [329.63, 392.00, 440.00, 523.25, 587.33, 659.25],          // airy, higher
 };
 
 function useKALAAudio() {
@@ -391,10 +394,16 @@ function useKALAAudio() {
     if (!ctxRef.current) {
       const ctx = new (window.AudioContext || window.webkitAudioContext)();
       ctxRef.current = ctx;
-      // master gain
+      // master gain → gentle low-pass → destination.
+      // The filter rolls off harsh high harmonics so the pad feels soft.
       masterRef.current = ctx.createGain();
       masterRef.current.gain.value = 0;
-      masterRef.current.connect(ctx.destination);
+      const lp = ctx.createBiquadFilter();
+      lp.type = "lowpass";
+      lp.frequency.value = 1400;
+      lp.Q.value = 0.4;
+      masterRef.current.connect(lp);
+      lp.connect(ctx.destination);
       // lightweight feedback-delay "reverb" (cheap, reliable)
       const delay = ctx.createDelay(2.0);
       delay.delayTime.value = 0.32;
@@ -410,7 +419,7 @@ function useKALAAudio() {
   };
 
   const startDrone = (ctx) => {
-    [[130.81, 0], [130.81, 9], [65.41, -5]].forEach(([freq, detune]) => {
+    [[130.81, 0], [130.81, 3], [65.41, -2]].forEach(([freq, detune]) => {
       const osc = ctx.createOscillator();
       const g = ctx.createGain();
       osc.type = "sine";
@@ -427,28 +436,28 @@ function useKALAAudio() {
     const now = ctx.currentTime;
     const osc = ctx.createOscillator();
     const env = ctx.createGain();
-    osc.type = "triangle";
+    osc.type = "sine";                   // purer & softer than triangle
     osc.frequency.value = freq;
     env.gain.setValueAtTime(0.0001, now);
-    env.gain.exponentialRampToValueAtTime(0.2, now + 0.05);
-    env.gain.exponentialRampToValueAtTime(0.0001, now + 3.6);
+    env.gain.exponentialRampToValueAtTime(0.14, now + 0.6);  // slow, gentle swell
+    env.gain.exponentialRampToValueAtTime(0.0001, now + 5.5); // long, calm decay
     osc.connect(env);
     env.connect(masterRef.current);      // dry
     if (reverbRef.current) env.connect(reverbRef.current); // wet
     osc.start(now);
-    osc.stop(now + 3.8);
+    osc.stop(now + 5.8);
   };
 
   const scheduleNotes = (firstImmediate) => {
     if (!playingRef.current) return;
     const ctx = getCtx();
     const scale = KALA_SCALES[scaleRef.current] || KALA_SCALES.default;
-    if (firstImmediate || Math.random() > 0.35) {
+    if (firstImmediate || Math.random() > 0.45) {
       const freq = scale[Math.floor(Math.random() * scale.length)];
-      const octave = Math.random() > 0.72 ? 2 : 1;
+      const octave = Math.random() > 0.85 ? 2 : 1;
       playNote(ctx, freq * octave);
     }
-    const delay = 2600 + Math.random() * 3000;
+    const delay = 4000 + Math.random() * 4500;
     timerRef.current = setTimeout(() => scheduleNotes(false), delay);
   };
 
@@ -461,7 +470,7 @@ function useKALAAudio() {
     const begin = () => {
       masterRef.current.gain.cancelScheduledValues(ctx.currentTime);
       masterRef.current.gain.setValueAtTime(0.0001, ctx.currentTime);
-      masterRef.current.gain.exponentialRampToValueAtTime(0.6, ctx.currentTime + 2.2);
+      masterRef.current.gain.exponentialRampToValueAtTime(0.42, ctx.currentTime + 3.5);
       if (droneRef.current.length === 0) startDrone(ctx);
       scheduleNotes(true); // play a note immediately so it's audible at once
     };
