@@ -3590,8 +3590,15 @@ function CountdownView({ countdowns, setCountdowns, lang }) {
 function CountdownCard({ item, onRemove, delay, lang }) {
   const now = useNow(1000);
   const base = parseLocalDate(item.date);
-  // target = end of the chosen day, so an event "today" still counts as today.
-  const target = base ? new Date(base.getFullYear(), base.getMonth(), base.getDate(), 23, 59, 59, 999) : null;
+  // target = the exact time if one was set, else the end of the chosen day
+  // (so an all-day event still counts as "today" right up to midnight).
+  let target = null;
+  if (base && item.time) {
+    const [h, m] = item.time.split(":").map(Number);
+    target = new Date(base.getFullYear(), base.getMonth(), base.getDate(), h || 0, m || 0, 0, 0);
+  } else if (base) {
+    target = new Date(base.getFullYear(), base.getMonth(), base.getDate(), 23, 59, 59, 999);
+  }
   const ms = target ? target - now : 0;
   const past = ms < 0;
   const abs = Math.abs(ms);
@@ -3602,7 +3609,10 @@ function CountdownCard({ item, onRemove, delay, lang }) {
   const isToday = !past && days === 0;
   const accent = past ? C.soilSoft : C.clay;
   const locale = lang === "id" ? "id-ID" : "en-US";
-  const dateLabel = base ? base.toLocaleDateString(locale, { weekday: "long", day: "numeric", month: "long", year: "numeric" }) : "—";
+  let dateLabel = base ? base.toLocaleDateString(locale, { weekday: "long", day: "numeric", month: "long", year: "numeric" }) : "—";
+  if (base && item.time && target) {
+    dateLabel += " · " + target.toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" });
+  }
 
   const Part = ({ n, l }) => (
     <div style={{ textAlign: "center", minWidth: 52 }}>
@@ -3663,10 +3673,11 @@ function CountdownCard({ item, onRemove, delay, lang }) {
 function AddCountdown({ onAdd, onCancel, lang }) {
   const [title, setTitle] = useState("");
   const [date, setDate] = useState("");
+  const [time, setTime] = useState("");
   const valid = title.trim() && date;
   const submit = () => {
     if (!valid) return;
-    onAdd({ id: Date.now(), title: title.trim(), date });
+    onAdd({ id: Date.now(), title: title.trim(), date, ...(time ? { time } : {}) });
   };
   return (
     <div className="kCard kFadeUp" style={cardStyle({ marginTop: 16 })}>
@@ -3680,9 +3691,15 @@ function AddCountdown({ onAdd, onCancel, lang }) {
             onKeyDown={(e) => { if (e.key === "Enter") submit(); }}
             placeholder="e.g. Wedding, Bali trip, Exam day" />
         </div>
-        <div>
-          <Label>{tr("Date", lang)}</Label>
-          <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+          <div style={{ flex: 2, minWidth: 150 }}>
+            <Label>{tr("Date", lang)}</Label>
+            <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+          </div>
+          <div style={{ flex: 1, minWidth: 120 }}>
+            <Label>{tr("Time", lang)} · {tr("optional", lang)}</Label>
+            <Input type="time" value={time} onChange={(e) => setTime(e.target.value)} />
+          </div>
         </div>
       </div>
       <div style={{ display: "flex", gap: 8, marginTop: 18 }}>
@@ -3800,6 +3817,8 @@ function CalendarView({ countdowns, lang, goToCountdown }) {
               padding: "12px 0", borderBottom: `1px solid ${C.line}` }}>
               <span style={{ width: 9, height: 9, borderRadius: 99, background: C.clay, flexShrink: 0 }} />
               <span style={{ fontSize: 15, fontWeight: 600, color: C.soil }}>{c.title}</span>
+              {c.time && <span style={{ marginLeft: "auto", fontSize: 12.5, color: C.soilSoft,
+                fontVariantNumeric: "tabular-nums" }}>{c.time}</span>}
             </div>
           ))
         ) : (
