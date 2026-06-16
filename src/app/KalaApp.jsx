@@ -1270,6 +1270,7 @@ function LifeView({ profile, lived, total, remaining, age, pct, milestoneWeeks, 
   const [phase, setPhase] = useState(kIntroPlayed ? "done" : "build");
   const [zoomPhase, setZoomPhase] = useState("idle"); // idle | in | out
   const [showPointer, setShowPointer] = useState(false);
+  const [showNote, setShowNote] = useState(false); // gentle life-estimate note, hidden until tapped
   const introRan = useRef(false);
   useEffect(() => {
     if (introRan.current) return;   // guard against double-invoke (StrictMode / re-render)
@@ -1307,11 +1308,28 @@ function LifeView({ profile, lived, total, remaining, age, pct, milestoneWeeks, 
         <Stat n={pct + "%"} l={tr("Life lived", lang)} />
         <Stat n={age} l={tr("Years old", lang)} />
       </div>
-      {/* gentle framing — these are possibilities, not verdicts */}
-      <p style={{ fontSize: 12.5, color: C.soilSoft, marginBottom: 24, lineHeight: 1.5, fontStyle: "italic",
-        fontFamily: "'Fraunces',serif" }}>
-        {tr("A gentle estimate, not a promise — what matters is how you spend it.", lang)}
-      </p>
+      {/* gentle framing — hidden by default; a quiet dot reveals it on tap */}
+      <div style={{ marginBottom: 24 }}>
+        <button onClick={() => setShowNote((v) => !v)} className="kBtn"
+          aria-expanded={showNote} aria-label={tr("About these numbers", lang)}
+          title={tr("About these numbers", lang)}
+          style={{ display: "inline-flex", alignItems: "center", gap: 6, background: "transparent",
+            border: "none", cursor: "pointer", fontFamily: "inherit", padding: 0,
+            fontSize: 12, color: C.soilSoft, opacity: showNote ? 1 : 0.75 }}>
+          <span style={{ width: 15, height: 15, borderRadius: 99, border: `1px solid ${C.line}`,
+            display: "inline-flex", alignItems: "center", justifyContent: "center",
+            fontSize: 10, fontStyle: "italic", fontFamily: "'Fraunces',serif", lineHeight: 1,
+            color: C.soilSoft }}>i</span>
+          {tr("About these numbers", lang)}
+        </button>
+        {showNote && (
+          <p style={{ fontSize: 12.5, color: C.soilSoft, margin: "8px 0 0", lineHeight: 1.5,
+            fontStyle: "italic", fontFamily: "'Fraunces',serif", maxWidth: 460,
+            animation: "kFadeUp .35s ease both" }}>
+            {tr("These numbers assume a long life", lang)} — {tr("they're a gentle estimate, not a promise. The point isn't how much time is left, but how you choose to spend it.", lang)}
+          </p>
+        )}
+      </div>
 
       {/* plan switcher */}
       {plans && plans.length > 0 && (
@@ -3530,14 +3548,11 @@ function LiveDateBar({ lang }) {
   const dateStr = now.toLocaleDateString(locale, { weekday: "long", day: "numeric", month: "long", year: "numeric" });
   const timeStr = now.toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" });
   return (
-    <div aria-label={`${dateStr} ${timeStr}`} style={{ display: "flex", alignItems: "center",
-      justifyContent: "flex-end", gap: 8, margin: "-4px 0 14px", userSelect: "none" }}>
-      <span style={{ width: 6, height: 6, borderRadius: 99, background: C.clay, opacity: 0.7,
-        animation: "kRingPulse 2.6s ease-in-out infinite", flexShrink: 0 }} />
-      <span style={{ fontSize: 12.5, color: C.soilSoft, letterSpacing: ".02em", whiteSpace: "nowrap",
+    <div aria-label={`${dateStr} ${timeStr}`} style={{ display: "flex", alignItems: "baseline",
+      justifyContent: "flex-start", gap: 6, margin: "-6px 0 16px", userSelect: "none" }}>
+      <span style={{ fontSize: 12, color: C.soilSoft, letterSpacing: ".02em", whiteSpace: "nowrap",
         overflow: "hidden", textOverflow: "ellipsis" }}>
-        {dateStr} · <span style={{ color: C.soil, fontWeight: 600,
-          fontVariantNumeric: "tabular-nums" }}>{timeStr}</span>
+        {dateStr} · <span style={{ fontVariantNumeric: "tabular-nums" }}>{timeStr}</span>
       </span>
     </div>
   );
