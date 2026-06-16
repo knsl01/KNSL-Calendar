@@ -7,7 +7,7 @@ import { WEEKS_PER_YEAR, weeksBetween, fmt, currentWeekKey } from "@/lib/helpers
 import {
   AREAS, PRIMARY_TABS, SECONDARY_TABS, LIFE_SEASONS, RELATIONS,
   WEEKLY_PROMPTS, weekPromptIndex,
-  WRAPPED_THEMES, WRAPPED_HEADLINES, WRAPPED_CAPTIONS,
+  WRAPPED_THEMES, WRAPPED_HEADLINES, WRAPPED_CAPTIONS, WRAPPED_QUOTES,
 } from "@/lib/constants";
 import { I18N, tr } from "@/lib/i18n";
 
@@ -2876,19 +2876,58 @@ function WrappedView({ profile, roadmap, memories, lived, total, age, pct }) {
   const [themeIdx, setThemeIdx] = useState(0);
   const [headIdx, setHeadIdx] = useState(0);
   const [capIdx, setCapIdx] = useState(0);
+  const [quoteOn, setQuoteOn] = useState(false);
+  const [quoteIdx, setQuoteIdx] = useState(0);
+
+  // Pool of stats that can appear on the card. The card shows 4 at a time and
+  // they can be shuffled — including "weeks lived so far" and "weeks left in life".
+  const remaining = Math.max(0, total - lived);
+  const STAT_POOL = [
+    { n: "52", l: "weeks lived this year" },
+    { n: fmt(lived), l: "weeks lived so far" },
+    { n: fmt(remaining), l: "weeks left in life" },
+    { n: pct + "%", l: "of life so far" },
+    { n: fmt(age), l: "years on earth" },
+    { n: fmt(memories.length), l: "memories marked" },
+    { n: fmt(milestonesAhead), l: "milestones ahead" },
+  ];
+  // Default selection mirrors the original card (this year / % / memories / milestones).
+  const [statIdx, setStatIdx] = useState([0, 3, 5, 6]);
+  const stats = statIdx.map((i) => STAT_POOL[i]);
 
   const wt = WRAPPED_THEMES[themeIdx];
   const head = WRAPPED_HEADLINES[headIdx];
   const cap = WRAPPED_CAPTIONS[capIdx];
+  const quote = WRAPPED_QUOTES[quoteIdx];
   const nm = profile.name || "Your";
   const line1 = head[0].replace("{name}", nm + "'s").replace("Your's", "Your");
   const line2 = head[1].replace("{name}", nm + "'s").replace("Your's", "Your");
+
+  // Pick 4 distinct stats at random from the pool.
+  const shuffleStats = () => {
+    const idxs = [...Array(STAT_POOL.length).keys()];
+    for (let i = idxs.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [idxs[i], idxs[j]] = [idxs[j], idxs[i]];
+    }
+    setStatIdx(idxs.slice(0, 4).sort((a, b) => a - b));
+  };
+  const shuffleQuote = () => setQuoteIdx(Math.floor(Math.random() * WRAPPED_QUOTES.length));
+  // Randomize everything at once for a fresh look.
+  const shuffleAll = () => {
+    setThemeIdx(Math.floor(Math.random() * WRAPPED_THEMES.length));
+    setHeadIdx(Math.floor(Math.random() * WRAPPED_HEADLINES.length));
+    setCapIdx(Math.floor(Math.random() * WRAPPED_CAPTIONS.length));
+    shuffleStats();
+    shuffleQuote();
+  };
 
   const data = {
     name: nm, year, pct, age, lived,
     memories: memories.length, milestones: milestonesAhead,
     focus: focusArea.label, intention: profile.intention,
     line1, line2, caption: cap, theme: wt,
+    stats, quote: quoteOn ? quote : null,
   };
 
   const doExport = async (share) => {
@@ -2932,10 +2971,9 @@ function WrappedView({ profile, roadmap, memories, lived, total, age, pct }) {
 
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(120px,1fr))",
             gap: 20, marginTop: 30 }}>
-            <WStat n={52} l="weeks lived this year" soft={wt.soft} />
-            <WStat n={pct + "%"} l="of life so far" soft={wt.soft} />
-            <WStat n={memories.length} l="memories marked" soft={wt.soft} />
-            <WStat n={milestonesAhead} l="milestones ahead" soft={wt.soft} />
+            {stats.map((s, i) => (
+              <WStat key={i} n={s.n} l={s.l} soft={wt.soft} />
+            ))}
           </div>
 
           <div style={{ marginTop: 30, paddingTop: 22, borderTop: `1px solid ${wt.soft}` }}>
@@ -2949,6 +2987,13 @@ function WrappedView({ profile, roadmap, memories, lived, total, age, pct }) {
             <p style={{ marginTop: 24, fontFamily: "'Fraunces',serif", fontStyle: "italic",
               fontSize: 18, lineHeight: 1.5, color: wt.text, opacity: 0.92 }}>
               "{profile.intention}"
+            </p>
+          )}
+          {quoteOn && (
+            <p style={{ marginTop: 20, paddingLeft: 14, borderLeft: `2px solid ${wt.accent}`,
+              fontFamily: "'Fraunces',serif", fontStyle: "italic", fontSize: 17,
+              lineHeight: 1.5, color: wt.accent }}>
+              "{quote}"
             </p>
           )}
           <div style={{ marginTop: 22, fontSize: 12.5, color: wt.soft }}>{cap}</div>
@@ -2997,6 +3042,30 @@ function WrappedView({ profile, roadmap, memories, lived, total, age, pct }) {
             Shuffle caption ↻
           </Btn>
         </div>
+        <div>
+          <div style={{ fontSize: 12, letterSpacing: ".12em", textTransform: "uppercase",
+            color: C.soilSoft, fontWeight: 600, marginBottom: 8 }}>Stats</div>
+          <Btn small variant="ghost" onClick={shuffleStats}>
+            Shuffle stats ↻
+          </Btn>
+        </div>
+        <div>
+          <div style={{ fontSize: 12, letterSpacing: ".12em", textTransform: "uppercase",
+            color: C.soilSoft, fontWeight: 600, marginBottom: 8 }}>Quote</div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <Btn small variant="ghost" onClick={() => setQuoteOn((v) => !v)}>
+              {quoteOn ? "Quote on ✓" : "Add quote +"}
+            </Btn>
+            <Btn small variant="ghost" disabled={!quoteOn}
+              onClick={() => setQuoteIdx((quoteIdx + 1) % WRAPPED_QUOTES.length)}>
+              Shuffle quote ↻
+            </Btn>
+          </div>
+        </div>
+      </div>
+
+      <div style={{ marginTop: 18 }}>
+        <Btn variant="ghost" onClick={shuffleAll}>Shuffle everything ↻</Btn>
       </div>
 
       <div style={{ display: "flex", gap: 10, marginTop: 22, flexWrap: "wrap" }}>
@@ -3055,12 +3124,14 @@ function renderWrappedImage(d) {
       x.fillStyle = accent; x.font = "italic 500 90px 'Fraunces', serif";
       x.fillText(d.line2, PAD, 425);
 
-      const stats = [
-        ["52", "weeks lived this year"],
-        [d.pct + "%", "of life so far"],
-        [String(d.memories), "memories marked"],
-        [String(d.milestones), "milestones ahead"],
-      ];
+      const stats = (d.stats && d.stats.length
+        ? d.stats.map((s) => [String(s.n), s.l])
+        : [
+            ["52", "weeks lived this year"],
+            [d.pct + "%", "of life so far"],
+            [String(d.memories), "memories marked"],
+            [String(d.milestones), "milestones ahead"],
+          ]);
       const colX = [PAD, W / 2 + 20];
       const rowY = [640, 860];
       stats.forEach((s, i) => {
@@ -3084,6 +3155,12 @@ function renderWrappedImage(d) {
         x.fillStyle = cream;
         x.font = "italic 500 40px 'Fraunces', serif";
         capY = wrapText(x, `"${d.intention}"`, PAD, 1280, W - PAD * 2, 56) + 70;
+      }
+      // optional reflective quote
+      if (d.quote) {
+        x.fillStyle = accent;
+        x.font = "italic 500 38px 'Fraunces', serif";
+        capY = wrapText(x, `"${d.quote}"`, PAD, Math.min(capY, H - 330), W - PAD * 2, 52) + 64;
       }
       // caption
       x.fillStyle = soft; x.font = "400 30px 'Jakarta', sans-serif";

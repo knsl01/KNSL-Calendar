@@ -92,3 +92,15 @@ export const WRAPPED_CAPTIONS = [
   "the weeks that made this year.",
 ];
 
+// Reflective quotes — optional, shown on the Wrapped card and shuffled.
+export const WRAPPED_QUOTES = [
+  "How we spend our days is how we spend our lives.",
+  "Time is the coin of your life. Spend it wisely.",
+  "Don't count the weeks — make the weeks count.",
+  "The trouble is, you think you have time.",
+  "It is not that we have a short life, but that we waste much of it.",
+  "Yesterday is gone. Tomorrow is not yet. We have only today.",
+  "Lost time is never found again.",
+  "Begin doing what you want to do now. The clock is ticking.",
+];
+
