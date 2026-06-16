@@ -16,6 +16,8 @@ export const PRIMARY_TABS = [
   { key: "simulate", label: "Simulate" },
 ];
 export const SECONDARY_TABS = [
+  { key: "calendar", label: "Calendar", desc: "Your month at a glance" },
+  { key: "countdown", label: "Countdown", desc: "Count down to what matters" },
   { key: "people", label: "Time With", desc: "The moments you have left together" },
   { key: "memory", label: "Memory Timeline", desc: "Mark the moments that shaped you" },
   { key: "diary", label: "Diary", desc: "Write this week's page" },

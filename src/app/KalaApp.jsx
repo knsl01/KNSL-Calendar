@@ -220,6 +220,7 @@ export default function KalaApp() {
   const [weekly, setWeekly] = useState({});
   const [lastSeenWeek, setLastSeenWeek] = useState(null);
   const [people, setPeople] = useState([]); // [{id,name,relation,theirAge,theirLifeExp,perYear}]
+  const [countdowns, setCountdowns] = useState([]); // [{id,title,date}]
 
   // load once on mount — and react to Supabase sign-in (magic-link return)
   useEffect(() => {
@@ -242,6 +243,7 @@ export default function KalaApp() {
         setDiary(saved.diary || []);
         setWeekly(saved.weekly || {});
         setPeople(saved.people || []);
+        setCountdowns(saved.countdowns || []);
         setLastSeenWeek(saved.lastSeenWeek || null);
         if (saved.theme) setTheme(saved.theme);
         if (saved.dark) setDark(saved.dark);
@@ -280,17 +282,17 @@ export default function KalaApp() {
     if (stage !== "app") return;
     clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => {
-      saveState({ profile, plans, activePlan, memories, diary, weekly, lastSeenWeek, people, theme, dark, lang, account });
+      saveState({ profile, plans, activePlan, memories, diary, weekly, lastSeenWeek, people, countdowns, theme, dark, lang, account });
     }, 600);
     return () => clearTimeout(saveTimer.current);
-  }, [stage, profile, plans, activePlan, memories, diary, weekly, lastSeenWeek, people, theme, dark, lang, account]);
+  }, [stage, profile, plans, activePlan, memories, diary, weekly, lastSeenWeek, people, countdowns, theme, dark, lang, account]);
 
   const resetAll = async () => {
     await clearState();
     setProfile({ name: "", birth: "", lifeExp: 73, focus: [], intention: "" });
     setPlans([{ id: 1, name: "Plan A", steps: [] }]);
     setActivePlan(1);
-    setMemories([]); setDiary([]); setWeekly({}); setPeople([]);
+    setMemories([]); setDiary([]); setWeekly({}); setPeople([]); setCountdowns([]);
     setAccount(null);
     setStage("auth");
   };
@@ -344,6 +346,7 @@ export default function KalaApp() {
           weekly={weekly} setWeekly={setWeekly}
           lastSeenWeek={lastSeenWeek} setLastSeenWeek={setLastSeenWeek}
           people={people} setPeople={setPeople}
+          countdowns={countdowns} setCountdowns={setCountdowns}
           theme={theme} setTheme={setTheme} dark={dark} setDark={setDark} lang={lang} setLang={setLang}
           onReset={resetAll} />
       )}
@@ -916,7 +919,8 @@ function Reveal({ profile, onDone }) {
 
 function Main({ profile, setProfile, plans, setPlans, activePlan, setActivePlan,
   memories, setMemories, diary, setDiary, weekly, setWeekly,
-  lastSeenWeek, setLastSeenWeek, people, setPeople, theme, setTheme, dark, setDark, lang, setLang, onReset }) {
+  lastSeenWeek, setLastSeenWeek, people, setPeople, countdowns, setCountdowns,
+  theme, setTheme, dark, setDark, lang, setLang, onReset }) {
   const [tab, setTab] = useState("life");
   const [drawer, setDrawer] = useState(false);
   const audio = useKALAAudio();
@@ -931,7 +935,7 @@ function Main({ profile, setProfile, plans, setPlans, activePlan, setActivePlan,
   // ---- export / import all data (trust & portability) ----
   const exportData = () => {
     const payload = { _app: "KALA", _v: 1, exportedAt: new Date().toISOString(),
-      profile, plans, activePlan, memories, diary, weekly, people };
+      profile, plans, activePlan, memories, diary, weekly, people, countdowns };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -949,6 +953,7 @@ function Main({ profile, setProfile, plans, setPlans, activePlan, setActivePlan,
       if (d.diary) setDiary(d.diary);
       if (d.weekly) setWeekly(d.weekly);
       if (d.people) setPeople(d.people);
+      if (d.countdowns) setCountdowns(d.countdowns);
       return true;
     } catch { return false; }
   };
@@ -1029,6 +1034,7 @@ function Main({ profile, setProfile, plans, setPlans, activePlan, setActivePlan,
           <span style={{ fontSize: 11, color: C.soilSoft, letterSpacing: 0, marginLeft: 2 }}>▾</span>
         </button>
         <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+          <LiveClock lang={lang} />
           <KALAAudioButton audio={audio} />
           <div style={{ fontSize: 13, color: C.soilSoft }}>
             Hi, {profile.name || "friend"}
@@ -1076,6 +1082,13 @@ function Main({ profile, setProfile, plans, setPlans, activePlan, setActivePlan,
         )}
         {tab === "simulate" && (
           <SimulateView age={age} lifeExp={profile.lifeExp} />
+        )}
+        {tab === "calendar" && (
+          <CalendarView countdowns={countdowns} memories={memories} lang={lang}
+            goToCountdown={() => setTab("countdown")} />
+        )}
+        {tab === "countdown" && (
+          <CountdownView countdowns={countdowns} setCountdowns={setCountdowns} lang={lang} />
         )}
         {tab === "people" && (
           <PeopleView people={people} setPeople={setPeople} lang={lang} />
@@ -3478,6 +3491,328 @@ function AddPerson({ onAdd, onCancel }) {
         <Btn small onClick={submit} disabled={!valid}>See our time together</Btn>
         {onCancel && <Btn small variant="ghost" onClick={onCancel}>Cancel</Btn>}
       </div>
+    </div>
+  );
+}
+
+// ---------- LIVE CLOCK / DATE ----------
+// A ticking "now" shared by the live date in the header, the countdowns,
+// and the calendar's "today" highlight. Updates on an interval and cleans up.
+function useNow(intervalMs = 1000) {
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const id = setInterval(() => setNow(new Date()), intervalMs);
+    return () => clearInterval(id);
+  }, [intervalMs]);
+  return now;
+}
+
+// Quiet real-time date + clock for the top bar. Present but not loud:
+// small, right-aligned, in the soft ink color so it informs without distracting.
+function LiveClock({ lang }) {
+  const now = useNow(1000);
+  const locale = lang === "id" ? "id-ID" : "en-US";
+  const dateStr = now.toLocaleDateString(locale, { weekday: "short", day: "numeric", month: "short" });
+  const timeStr = now.toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" });
+  return (
+    <div title={now.toLocaleString(locale)} aria-label={`${dateStr} ${timeStr}`}
+      style={{ display: "flex", flexDirection: "column", alignItems: "flex-end",
+        lineHeight: 1.15, userSelect: "none" }}>
+      <span style={{ fontFamily: "'Fraunces',serif", fontSize: 15, fontWeight: 600,
+        letterSpacing: ".01em", color: C.soil }}>{timeStr}</span>
+      <span style={{ fontSize: 10, letterSpacing: ".1em", textTransform: "uppercase",
+        color: C.soilSoft, marginTop: 1 }}>{dateStr}</span>
+    </div>
+  );
+}
+
+// ---------- DATE HELPERS (local-time, no timezone surprises) ----------
+function parseLocalDate(str) {
+  // "YYYY-MM-DD" → a Date at local midnight (avoids UTC off-by-one).
+  const [y, m, d] = (str || "").split("-").map(Number);
+  if (!y || !m || !d) return null;
+  return new Date(y, m - 1, d);
+}
+function dateKey(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+function isSameDay(a, b) {
+  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+}
+
+// ---------- COUNTDOWN VIEW ----------
+function CountdownView({ countdowns, setCountdowns, lang }) {
+  const [adding, setAdding] = useState(countdowns.length === 0);
+  const remove = (id) => setCountdowns(countdowns.filter((c) => c.id !== id));
+  // soonest first; past events sink to the bottom
+  const sorted = useMemo(() => {
+    const now = Date.now();
+    return [...countdowns].sort((a, b) => {
+      const ta = parseLocalDate(a.date)?.getTime() ?? 0;
+      const tb = parseLocalDate(b.date)?.getTime() ?? 0;
+      const pa = ta < now ? 1 : 0, pb = tb < now ? 1 : 0;
+      return pa - pb || ta - tb;
+    });
+  }, [countdowns]);
+
+  return (
+    <div>
+      <Card>
+        <Eyebrow>Countdown</Eyebrow>
+        <h2 style={{ fontFamily: "'Fraunces',serif", fontWeight: 500,
+          fontSize: "clamp(22px,4vw,30px)", lineHeight: 1.2, letterSpacing: "-.01em",
+          margin: "10px 0 8px" }}>
+          Got something planned?<br /><em style={{ fontStyle: "italic", color: C.clay }}>Watch it come closer.</em>
+        </h2>
+        <p style={{ color: C.soilSoft, fontSize: 15, lineHeight: 1.6 }}>
+          A trip, a birthday, a deadline, a dream. Add a date and KALA counts down
+          the days — so the things that matter stay in view.
+        </p>
+      </Card>
+
+      {sorted.map((c, i) => (
+        <CountdownCard key={c.id} item={c} delay={i * 60} lang={lang} onRemove={() => remove(c.id)} />
+      ))}
+
+      {adding ? (
+        <AddCountdown lang={lang}
+          onAdd={(c) => { setCountdowns([...countdowns, c]); setAdding(false); }}
+          onCancel={countdowns.length > 0 ? () => setAdding(false) : null} />
+      ) : (
+        <div style={{ marginTop: 16 }}>
+          <Btn onClick={() => setAdding(true)}>+ {tr("Add countdown", lang)}</Btn>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CountdownCard({ item, onRemove, delay, lang }) {
+  const now = useNow(1000);
+  const base = parseLocalDate(item.date);
+  // target = end of the chosen day, so an event "today" still counts as today.
+  const target = base ? new Date(base.getFullYear(), base.getMonth(), base.getDate(), 23, 59, 59, 999) : null;
+  const ms = target ? target - now : 0;
+  const past = ms < 0;
+  const abs = Math.abs(ms);
+  const days = Math.floor(abs / 86400000);
+  const hours = Math.floor((abs % 86400000) / 3600000);
+  const mins = Math.floor((abs % 3600000) / 60000);
+  const secs = Math.floor((abs % 60000) / 1000);
+  const isToday = !past && days === 0;
+  const accent = past ? C.soilSoft : C.clay;
+  const locale = lang === "id" ? "id-ID" : "en-US";
+  const dateLabel = base ? base.toLocaleDateString(locale, { weekday: "long", day: "numeric", month: "long", year: "numeric" }) : "—";
+
+  const Part = ({ n, l }) => (
+    <div style={{ textAlign: "center", minWidth: 52 }}>
+      <div style={{ fontFamily: "'Fraunces',serif", fontWeight: 600, fontSize: 26, lineHeight: 1, color: C.soil }}>
+        {String(n).padStart(2, "0")}
+      </div>
+      <div style={{ fontSize: 10, letterSpacing: ".12em", textTransform: "uppercase", color: C.soilSoft, marginTop: 5 }}>{l}</div>
+    </div>
+  );
+
+  return (
+    <div className="kCard kFadeUp" style={cardStyle({ marginTop: 16, animationDelay: `${delay}ms`,
+      opacity: past ? 0.72 : 1 })}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
+        <div>
+          <h3 style={{ fontFamily: "'Fraunces',serif", fontWeight: 600, fontSize: 21, lineHeight: 1.2 }}>{item.title}</h3>
+          <div style={{ fontSize: 12.5, color: C.soilSoft, marginTop: 4 }}>{dateLabel}</div>
+        </div>
+        <button onClick={onRemove} className="kBtn" style={{ background: "transparent", border: "none",
+          color: C.soilSoft, cursor: "pointer", fontSize: 18, opacity: 0.4, padding: "0 4px" }}>×</button>
+      </div>
+
+      <div style={{ marginTop: 18, padding: "18px 0 4px", borderTop: `1px solid ${C.line}` }}>
+        {isToday ? (
+          <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
+            <span style={{ fontFamily: "'Fraunces',serif", fontWeight: 600, fontSize: 40, color: C.clay, lineHeight: 1 }}>
+              {tr("Today", lang)} ✦
+            </span>
+            <span style={{ fontSize: 14, color: C.soil }}>it's here.</span>
+          </div>
+        ) : past ? (
+          <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
+            <span style={{ fontFamily: "'Fraunces',serif", fontWeight: 600, fontSize: 34, color: accent, lineHeight: 1 }}>
+              {fmt(days)}
+            </span>
+            <span style={{ fontSize: 14, color: C.soilSoft }}>{tr("days", lang)} ago</span>
+          </div>
+        ) : (
+          <>
+            <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
+              <span style={{ fontFamily: "'Fraunces',serif", fontWeight: 600, fontSize: 44, color: C.clay, lineHeight: 1 }}>
+                {fmt(days)}
+              </span>
+              <span style={{ fontSize: 15, color: C.soil }}>{tr("days", lang)} to go</span>
+            </div>
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+              <Part n={hours} l="hrs" />
+              <Part n={mins} l="min" />
+              <Part n={secs} l="sec" />
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function AddCountdown({ onAdd, onCancel, lang }) {
+  const [title, setTitle] = useState("");
+  const [date, setDate] = useState("");
+  const valid = title.trim() && date;
+  const submit = () => {
+    if (!valid) return;
+    onAdd({ id: Date.now(), title: title.trim(), date });
+  };
+  return (
+    <div className="kCard kFadeUp" style={cardStyle({ marginTop: 16 })}>
+      <h3 style={{ fontFamily: "'Fraunces',serif", fontWeight: 500, fontSize: 19, marginBottom: 16 }}>
+        {tr("What are you counting down to?", lang)}
+      </h3>
+      <div style={{ display: "grid", gap: 14 }}>
+        <div>
+          <Label>{tr("Title", lang)}</Label>
+          <Input value={title} onChange={(e) => setTitle(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") submit(); }}
+            placeholder="e.g. Wedding, Bali trip, Exam day" />
+        </div>
+        <div>
+          <Label>{tr("Date", lang)}</Label>
+          <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+        </div>
+      </div>
+      <div style={{ display: "flex", gap: 8, marginTop: 18 }}>
+        <Btn small onClick={submit} disabled={!valid}>{tr("Add", lang)}</Btn>
+        {onCancel && <Btn small variant="ghost" onClick={onCancel}>{tr("Cancel", lang)}</Btn>}
+      </div>
+    </div>
+  );
+}
+
+// ---------- CALENDAR VIEW ----------
+function CalendarView({ countdowns, lang, goToCountdown }) {
+  const now = useNow(60000); // a minute is plenty for a calendar
+  const [cursor, setCursor] = useState(() => new Date(now.getFullYear(), now.getMonth(), 1));
+  const [selected, setSelected] = useState(() => dateKey(now));
+  const locale = lang === "id" ? "id-ID" : "en-US";
+
+  // countdowns grouped by their date key
+  const byDate = useMemo(() => {
+    const m = {};
+    (countdowns || []).forEach((c) => { (m[c.date] ||= []).push(c); });
+    return m;
+  }, [countdowns]);
+
+  const year = cursor.getFullYear(), month = cursor.getMonth();
+  const firstDay = new Date(year, month, 1).getDay(); // 0=Sun
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const monthLabel = cursor.toLocaleDateString(locale, { month: "long", year: "numeric" });
+  const weekdays = useMemo(() => {
+    // localized short weekday names, Sun→Sat
+    return Array.from({ length: 7 }, (_, i) =>
+      new Date(2024, 0, 7 + i).toLocaleDateString(locale, { weekday: "short" }));
+  }, [locale]);
+
+  const cells = [];
+  for (let i = 0; i < firstDay; i++) cells.push(null);
+  for (let d = 1; d <= daysInMonth; d++) cells.push(new Date(year, month, d));
+
+  const move = (delta) => setCursor(new Date(year, month + delta, 1));
+  const goToday = () => { setCursor(new Date(now.getFullYear(), now.getMonth(), 1)); setSelected(dateKey(now)); };
+
+  const selectedEvents = byDate[selected] || [];
+  const selDate = parseLocalDate(selected);
+
+  const navBtn = (label, onClick, aria) => (
+    <button onClick={onClick} className="kBtn" aria-label={aria} style={{ background: "transparent",
+      border: `1px solid ${C.line}`, borderRadius: 99, width: 34, height: 34, cursor: "pointer",
+      color: C.soil, fontSize: 16, fontFamily: "inherit", lineHeight: 1 }}>{label}</button>
+  );
+
+  return (
+    <div>
+      <Card>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center",
+          marginBottom: 18, flexWrap: "wrap", gap: 10 }}>
+          <h2 style={{ fontFamily: "'Fraunces',serif", fontWeight: 500, fontSize: "clamp(20px,4vw,26px)",
+            letterSpacing: "-.01em" }}>{monthLabel}</h2>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <button onClick={goToday} className="kBtn" style={{ background: "transparent",
+              border: `1px solid ${C.line}`, borderRadius: 99, padding: "6px 14px", cursor: "pointer",
+              color: C.soilSoft, fontSize: 12.5, fontWeight: 600, fontFamily: "inherit" }}>
+              {tr("Today", lang)}
+            </button>
+            {navBtn("‹", () => move(-1), "Previous month")}
+            {navBtn("›", () => move(1), "Next month")}
+          </div>
+        </div>
+
+        {/* weekday header */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 4, marginBottom: 6 }}>
+          {weekdays.map((w) => (
+            <div key={w} style={{ textAlign: "center", fontSize: 10.5, letterSpacing: ".08em",
+              textTransform: "uppercase", color: C.soilSoft, fontWeight: 600 }}>{w}</div>
+          ))}
+        </div>
+
+        {/* day grid */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 4 }}>
+          {cells.map((d, i) => {
+            if (!d) return <div key={"e" + i} />;
+            const key = dateKey(d);
+            const today = isSameDay(d, now);
+            const isSel = key === selected;
+            const events = byDate[key] || [];
+            return (
+              <button key={key} onClick={() => setSelected(key)} className="kBtn"
+                style={{ aspectRatio: "1 / 1", borderRadius: 10, cursor: "pointer", fontFamily: "inherit",
+                  display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 3,
+                  border: `1px solid ${isSel ? C.clay : "transparent"}`,
+                  background: today ? C.clay : isSel ? C.paper : "transparent",
+                  boxShadow: isSel && !today ? `inset 0 0 0 1px ${C.line}` : "none" }}>
+                <span style={{ fontSize: 13.5, fontWeight: today ? 700 : 500,
+                  color: today ? C.paper : C.soil }}>{d.getDate()}</span>
+                <span style={{ display: "flex", gap: 2, height: 5 }}>
+                  {events.slice(0, 3).map((_, k) => (
+                    <span key={k} style={{ width: 5, height: 5, borderRadius: 99,
+                      background: today ? C.paper : C.clay, opacity: today ? 0.9 : 1 }} />
+                  ))}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </Card>
+
+      {/* selected day detail */}
+      <Card style={{ marginTop: 18 }} delay={100}>
+        <div style={{ fontSize: 12, letterSpacing: ".12em", textTransform: "uppercase",
+          color: C.soilSoft, fontWeight: 600, marginBottom: 6 }}>
+          {selDate ? selDate.toLocaleDateString(locale, { weekday: "long", day: "numeric", month: "long" }) : ""}
+        </div>
+        {selectedEvents.length > 0 ? (
+          selectedEvents.map((c) => (
+            <div key={c.id} className="kRow" style={{ display: "flex", alignItems: "center", gap: 12,
+              padding: "12px 0", borderBottom: `1px solid ${C.line}` }}>
+              <span style={{ width: 9, height: 9, borderRadius: 99, background: C.clay, flexShrink: 0 }} />
+              <span style={{ fontSize: 15, fontWeight: 600, color: C.soil }}>{c.title}</span>
+            </div>
+          ))
+        ) : (
+          <p style={{ fontSize: 13.5, color: C.soilSoft, lineHeight: 1.6, margin: "4px 0 0" }}>
+            {tr("Nothing on the calendar yet", lang)}.{" "}
+            <button onClick={goToCountdown} className="kBtn" style={{ background: "transparent",
+              border: "none", color: C.clay, fontWeight: 600, cursor: "pointer", fontFamily: "inherit",
+              fontSize: 13.5, padding: 0 }}>
+              {tr("Add countdown", lang)} →
+            </button>
+          </p>
+        )}
+      </Card>
     </div>
   );
 }
