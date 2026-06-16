@@ -25,6 +25,41 @@ export const SECONDARY_TABS = [
   { key: "settings", label: "Settings", desc: "Profile, appearance, language" },
 ];
 
+// Single source of truth for every tab the app can show. The main menu (the
+// top tab bar) is user-customizable, so we look tabs up by key from here
+// rather than relying on the primary/secondary split above.
+export const TAB_META = {
+  life: { label: "Life", desc: "Your life in weeks" },
+  reflect: { label: "Reflect", desc: "This week's check-in" },
+  architect: { label: "Plans", desc: "Design your roadmap" },
+  simulate: { label: "Simulate", desc: "Explore possible futures" },
+  calendar: { label: "Calendar", desc: "Your month at a glance" },
+  countdown: { label: "Countdown", desc: "Count down to what matters" },
+  people: { label: "Time With", desc: "The moments you have left together" },
+  memory: { label: "Memory Timeline", desc: "Mark the moments that shaped you" },
+  diary: { label: "Diary", desc: "Write this week's page" },
+  wrapped: { label: "Wrapped", desc: "Your year, shareable" },
+  settings: { label: "Settings", desc: "Profile, appearance, language" },
+};
+
+// Tabs the user can pin to / unpin from the top bar. `settings` is always
+// reachable from the side drawer, so it's intentionally not customizable.
+export const CUSTOMIZABLE_TABS = [
+  "life", "reflect", "architect", "simulate",
+  "calendar", "countdown", "people", "memory", "diary", "wrapped",
+];
+// What the top bar shows until the user changes it.
+export const DEFAULT_NAV = ["life", "reflect", "architect", "simulate"];
+
+// Keep a navTabs array valid: known keys only, de-duped, never empty.
+export function sanitizeNav(nav) {
+  const seen = new Set();
+  const clean = (Array.isArray(nav) ? nav : []).filter(
+    (k) => CUSTOMIZABLE_TABS.includes(k) && !seen.has(k) && seen.add(k)
+  );
+  return clean.length ? clean : [...DEFAULT_NAV];
+}
+
 export const LIFE_SEASONS = [
   { from: 0, to: 18, label: "Childhood", tint: "rgba(122,147,89,0.10)" },
   { from: 18, to: 30, label: "Becoming", tint: "rgba(184,110,46,0.09)" },
