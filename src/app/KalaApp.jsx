@@ -5,9 +5,10 @@ import { cloudEnabled } from "@/lib/supabase";
 import { sendMagicLink, verifyEmailCode, getUser, onAuthChange, signOut } from "@/lib/auth";
 import { WEEKS_PER_YEAR, weeksBetween, fmt, currentWeekKey } from "@/lib/helpers";
 import {
-  AREAS, PRIMARY_TABS, SECONDARY_TABS, LIFE_SEASONS, RELATIONS,
+  AREAS, LIFE_SEASONS, RELATIONS,
   WEEKLY_PROMPTS, weekPromptIndex,
   WRAPPED_THEMES, WRAPPED_HEADLINES, WRAPPED_CAPTIONS, WRAPPED_QUOTES,
+  TAB_META, CUSTOMIZABLE_TABS, DEFAULT_NAV, sanitizeNav,
 } from "@/lib/constants";
 import { I18N, tr } from "@/lib/i18n";
 
@@ -221,6 +222,8 @@ export default function KalaApp() {
   const [lastSeenWeek, setLastSeenWeek] = useState(null);
   const [people, setPeople] = useState([]); // [{id,name,relation,theirAge,theirLifeExp,perYear}]
   const [countdowns, setCountdowns] = useState([]); // [{id,title,date}]
+  const [navTabs, setNavTabsRaw] = useState([...DEFAULT_NAV]); // tab keys pinned to the top bar
+  const setNavTabs = (n) => setNavTabsRaw(sanitizeNav(typeof n === "function" ? n(navTabs) : n));
 
   // load once on mount — and react to Supabase sign-in (magic-link return)
   useEffect(() => {
@@ -244,6 +247,7 @@ export default function KalaApp() {
         setWeekly(saved.weekly || {});
         setPeople(saved.people || []);
         setCountdowns(saved.countdowns || []);
+        setNavTabsRaw(sanitizeNav(saved.navTabs));
         setLastSeenWeek(saved.lastSeenWeek || null);
         if (saved.theme) setTheme(saved.theme);
         if (saved.dark) setDark(saved.dark);
@@ -282,10 +286,10 @@ export default function KalaApp() {
     if (stage !== "app") return;
     clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => {
-      saveState({ profile, plans, activePlan, memories, diary, weekly, lastSeenWeek, people, countdowns, theme, dark, lang, account });
+      saveState({ profile, plans, activePlan, memories, diary, weekly, lastSeenWeek, people, countdowns, navTabs, theme, dark, lang, account });
     }, 600);
     return () => clearTimeout(saveTimer.current);
-  }, [stage, profile, plans, activePlan, memories, diary, weekly, lastSeenWeek, people, countdowns, theme, dark, lang, account]);
+  }, [stage, profile, plans, activePlan, memories, diary, weekly, lastSeenWeek, people, countdowns, navTabs, theme, dark, lang, account]);
 
   const resetAll = async () => {
     await clearState();
@@ -293,6 +297,7 @@ export default function KalaApp() {
     setPlans([{ id: 1, name: "Plan A", steps: [] }]);
     setActivePlan(1);
     setMemories([]); setDiary([]); setWeekly({}); setPeople([]); setCountdowns([]);
+    setNavTabsRaw([...DEFAULT_NAV]);
     setAccount(null);
     setStage("auth");
   };
@@ -347,6 +352,7 @@ export default function KalaApp() {
           lastSeenWeek={lastSeenWeek} setLastSeenWeek={setLastSeenWeek}
           people={people} setPeople={setPeople}
           countdowns={countdowns} setCountdowns={setCountdowns}
+          navTabs={navTabs} setNavTabs={setNavTabs}
           theme={theme} setTheme={setTheme} dark={dark} setDark={setDark} lang={lang} setLang={setLang}
           onReset={resetAll} />
       )}
@@ -920,7 +926,7 @@ function Reveal({ profile, onDone }) {
 function Main({ profile, setProfile, plans, setPlans, activePlan, setActivePlan,
   memories, setMemories, diary, setDiary, weekly, setWeekly,
   lastSeenWeek, setLastSeenWeek, people, setPeople, countdowns, setCountdowns,
-  theme, setTheme, dark, setDark, lang, setLang, onReset }) {
+  navTabs, setNavTabs, theme, setTheme, dark, setDark, lang, setLang, onReset }) {
   const [tab, setTab] = useState("life");
   const [drawer, setDrawer] = useState(false);
   const audio = useKALAAudio();
@@ -935,7 +941,7 @@ function Main({ profile, setProfile, plans, setPlans, activePlan, setActivePlan,
   // ---- export / import all data (trust & portability) ----
   const exportData = () => {
     const payload = { _app: "KALA", _v: 1, exportedAt: new Date().toISOString(),
-      profile, plans, activePlan, memories, diary, weekly, people, countdowns };
+      profile, plans, activePlan, memories, diary, weekly, people, countdowns, navTabs };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -954,6 +960,7 @@ function Main({ profile, setProfile, plans, setPlans, activePlan, setActivePlan,
       if (d.weekly) setWeekly(d.weekly);
       if (d.people) setPeople(d.people);
       if (d.countdowns) setCountdowns(d.countdowns);
+      if (d.navTabs) setNavTabs(d.navTabs);
       return true;
     } catch { return false; }
   };
@@ -1018,8 +1025,9 @@ function Main({ profile, setProfile, plans, setPlans, activePlan, setActivePlan,
     return map;
   }, [roadmap, lived]);
 
-  const isSecondary = SECONDARY_TABS.some((t) => t.key === tab);
-  const activeLabel = [...PRIMARY_TABS, ...SECONDARY_TABS].find((t) => t.key === tab)?.label;
+  // the top bar is user-customizable; a tab not pinned there is "secondary"
+  const isSecondary = !navTabs.includes(tab);
+  const activeLabel = TAB_META[tab]?.label;
 
   return (
     <div style={{ maxWidth: 1080, margin: "0 auto", padding: "0 20px 80px" }}>
@@ -1033,8 +1041,8 @@ function Main({ profile, setProfile, plans, setPlans, activePlan, setActivePlan,
           <Glyph small /> KALA
           <span style={{ fontSize: 11, color: C.soilSoft, letterSpacing: 0, marginLeft: 2 }}>▾</span>
         </button>
-        <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-          <LiveClock lang={lang} />
+        <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap",
+          justifyContent: "flex-end" }}>
           <KALAAudioButton audio={audio} />
           <div style={{ fontSize: 13, color: C.soilSoft }}>
             Hi, {profile.name || "friend"}
@@ -1042,18 +1050,21 @@ function Main({ profile, setProfile, plans, setPlans, activePlan, setActivePlan,
         </div>
       </header>
 
-      {/* primary tabs only */}
+      {/* live date — quiet, single line, never crowds the header */}
+      <LiveDateBar lang={lang} />
+
+      {/* primary tabs — user-customizable via Settings */}
       <div style={{ display: "flex", gap: 8, marginBottom: 28, borderBottom: `1px solid ${C.line}`,
         flexWrap: "wrap", alignItems: "center" }}>
-        {PRIMARY_TABS.map((tb) => (
-          <Tab key={tb.key} active={tab === tb.key} onClick={() => setTab(tb.key)}>{tr(tb.label, lang)}</Tab>
+        {navTabs.map((key) => (
+          <Tab key={key} active={tab === key} onClick={() => setTab(key)}>{tr(TAB_META[key]?.label || key, lang)}</Tab>
         ))}
-        {/* if a secondary tab is active, show it as a pill so user isn't lost */}
+        {/* if a non-pinned tab is active, show it as a pill so the user isn't lost */}
         {isSecondary && (
           <span style={{ marginLeft: "auto", fontSize: 12.5, color: C.clay, fontWeight: 600,
             display: "flex", alignItems: "center", gap: 6 }}>
-            {activeLabel}
-            <button onClick={() => setTab("life")} className="kBtn" style={{ background: "transparent",
+            {tr(activeLabel || "", lang)}
+            <button onClick={() => setTab(navTabs[0])} className="kBtn" style={{ background: "transparent",
               border: "none", color: C.soilSoft, cursor: "pointer", fontSize: 15, padding: 0 }}>×</button>
           </span>
         )}
@@ -1107,6 +1118,7 @@ function Main({ profile, setProfile, plans, setPlans, activePlan, setActivePlan,
         {tab === "settings" && (
           <SettingsView profile={profile} setProfile={setProfile}
             exportData={exportData} importData={importData}
+            navTabs={navTabs} setNavTabs={setNavTabs}
             theme={theme} setTheme={setTheme} dark={dark} setDark={setDark} lang={lang} setLang={setLang}
             onReset={onReset} />
         )}
@@ -1116,7 +1128,7 @@ function Main({ profile, setProfile, plans, setPlans, activePlan, setActivePlan,
       {drawer && (
         <Drawer profile={profile} onClose={() => setDrawer(false)}
           tab={tab} setTab={(tk) => { setTab(tk); setDrawer(false); }}
-          lang={lang} onReset={onReset} />
+          navTabs={navTabs} lang={lang} onReset={onReset} />
       )}
 
       {/* WEEKLY NUDGE */}
@@ -1137,8 +1149,10 @@ function Main({ profile, setProfile, plans, setPlans, activePlan, setActivePlan,
   );
 }
 
-function Drawer({ profile, onClose, tab, setTab, lang, onReset }) {
+function Drawer({ profile, onClose, tab, setTab, navTabs, lang, onReset }) {
   const [confirmReset, setConfirmReset] = useState(false);
+  // "Main" mirrors the top bar; "More" is everything else, with Settings last.
+  const moreTabs = [...CUSTOMIZABLE_TABS.filter((k) => !navTabs.includes(k)), "settings"];
   return (
     <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 50,
       background: "rgba(46,32,24,.34)", animation: "kFadeIn .25s ease",
@@ -1160,15 +1174,15 @@ function Drawer({ profile, onClose, tab, setTab, lang, onReset }) {
 
         <div style={{ fontSize: 11, letterSpacing: ".2em", textTransform: "uppercase",
           color: C.soilSoft, fontWeight: 600, marginBottom: 12 }}>{tr("Main", lang)}</div>
-        {PRIMARY_TABS.map((tb) => (
-          <DrawerItem key={tb.key} label={tr(tb.label, lang)} active={tab === tb.key} onClick={() => setTab(tb.key)} />
+        {navTabs.map((key) => (
+          <DrawerItem key={key} label={tr(TAB_META[key]?.label || key, lang)} active={tab === key} onClick={() => setTab(key)} />
         ))}
 
         <div style={{ fontSize: 11, letterSpacing: ".2em", textTransform: "uppercase",
           color: C.soilSoft, fontWeight: 600, margin: "22px 0 12px" }}>{tr("More", lang)}</div>
-        {SECONDARY_TABS.map((tb) => (
-          <DrawerItem key={tb.key} label={tr(tb.label, lang)} desc={tb.desc}
-            active={tab === tb.key} onClick={() => setTab(tb.key)} />
+        {moreTabs.map((key) => (
+          <DrawerItem key={key} label={tr(TAB_META[key]?.label || key, lang)} desc={TAB_META[key]?.desc}
+            active={tab === key} onClick={() => setTab(key)} />
         ))}
 
         <div style={{ marginTop: 30, paddingTop: 20, borderTop: `1px solid ${C.line}`,
@@ -3507,21 +3521,23 @@ function useNow(intervalMs = 1000) {
   return now;
 }
 
-// Quiet real-time date + clock for the top bar. Present but not loud:
-// small, right-aligned, in the soft ink color so it informs without distracting.
-function LiveClock({ lang }) {
+// Quiet real-time date + clock. A single, self-contained line under the header
+// so it's clearly visible (it ticks) without crowding the brand or greeting.
+function LiveDateBar({ lang }) {
   const now = useNow(1000);
   const locale = lang === "id" ? "id-ID" : "en-US";
-  const dateStr = now.toLocaleDateString(locale, { weekday: "short", day: "numeric", month: "short" });
+  const dateStr = now.toLocaleDateString(locale, { weekday: "long", day: "numeric", month: "long", year: "numeric" });
   const timeStr = now.toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" });
   return (
-    <div title={now.toLocaleString(locale)} aria-label={`${dateStr} ${timeStr}`}
-      style={{ display: "flex", flexDirection: "column", alignItems: "flex-end",
-        lineHeight: 1.15, userSelect: "none" }}>
-      <span style={{ fontFamily: "'Fraunces',serif", fontSize: 15, fontWeight: 600,
-        letterSpacing: ".01em", color: C.soil }}>{timeStr}</span>
-      <span style={{ fontSize: 10, letterSpacing: ".1em", textTransform: "uppercase",
-        color: C.soilSoft, marginTop: 1 }}>{dateStr}</span>
+    <div aria-label={`${dateStr} ${timeStr}`} style={{ display: "flex", alignItems: "center",
+      justifyContent: "flex-end", gap: 8, margin: "-4px 0 14px", userSelect: "none" }}>
+      <span style={{ width: 6, height: 6, borderRadius: 99, background: C.clay, opacity: 0.7,
+        animation: "kRingPulse 2.6s ease-in-out infinite", flexShrink: 0 }} />
+      <span style={{ fontSize: 12.5, color: C.soilSoft, letterSpacing: ".02em", whiteSpace: "nowrap",
+        overflow: "hidden", textOverflow: "ellipsis" }}>
+        {dateStr} · <span style={{ color: C.soil, fontWeight: 600,
+          fontVariantNumeric: "tabular-nums" }}>{timeStr}</span>
+      </span>
     </div>
   );
 }
@@ -3836,7 +3852,80 @@ function CalendarView({ countdowns, lang, goToCountdown }) {
   );
 }
 
-function SettingsView({ profile, setProfile, exportData, importData, theme, setTheme, dark, setDark, lang, setLang, onReset }) {
+// Lets the user decide which tabs sit in the top bar — add Calendar, drop
+// Plans, reorder, etc. Pinned tabs show with reorder/remove controls; the
+// rest can be added back. Always keeps at least one tab pinned.
+function MainMenuSettings({ navTabs, setNavTabs, lang }) {
+  const pinned = navTabs;
+  const available = CUSTOMIZABLE_TABS.filter((k) => !pinned.includes(k));
+
+  const remove = (k) => { if (pinned.length > 1) setNavTabs(pinned.filter((x) => x !== k)); };
+  const add = (k) => setNavTabs([...pinned, k]);
+  const move = (k, dir) => {
+    const i = pinned.indexOf(k), j = i + dir;
+    if (i < 0 || j < 0 || j >= pinned.length) return;
+    const next = [...pinned];
+    [next[i], next[j]] = [next[j], next[i]];
+    setNavTabs(next);
+  };
+
+  const ctrl = (label, onClick, disabled, aria) => (
+    <button onClick={onClick} disabled={disabled} className="kBtn" aria-label={aria}
+      style={{ background: "transparent", border: `1px solid ${C.line}`, borderRadius: 8,
+        width: 28, height: 28, cursor: disabled ? "not-allowed" : "pointer", color: C.soilSoft,
+        opacity: disabled ? 0.35 : 1, fontSize: 13, fontFamily: "inherit", lineHeight: 1, flexShrink: 0 }}>
+      {label}
+    </button>
+  );
+
+  return (
+    <Card style={{ marginTop: 18 }} delay={40}>
+      <h3 style={{ fontFamily: "'Fraunces',serif", fontWeight: 500, fontSize: 20 }}>
+        {tr("Main menu", lang)}
+      </h3>
+      <p style={{ fontSize: 13, color: C.soilSoft, lineHeight: 1.6, margin: "6px 0 16px" }}>
+        {tr("Choose which tabs appear in the top bar — add, remove, or reorder them. The rest stay in the side menu.", lang)}
+      </p>
+
+      {/* pinned tabs */}
+      <div style={{ display: "grid", gap: 8 }}>
+        {pinned.map((k, i) => (
+          <div key={k} style={{ display: "flex", alignItems: "center", gap: 10,
+            background: C.bg, border: `1px solid ${C.line}`, borderRadius: 12, padding: "10px 12px" }}>
+            <span style={{ flex: 1, fontSize: 14.5, fontWeight: 600, color: C.soil }}>
+              {tr(TAB_META[k]?.label || k, lang)}
+            </span>
+            {ctrl("↑", () => move(k, -1), i === 0, "Move up")}
+            {ctrl("↓", () => move(k, 1), i === pinned.length - 1, "Move down")}
+            {ctrl("−", () => remove(k), pinned.length <= 1, "Remove from main menu")}
+          </div>
+        ))}
+      </div>
+
+      {/* add back */}
+      {available.length > 0 && (
+        <>
+          <div style={{ fontSize: 11.5, letterSpacing: ".08em", textTransform: "uppercase",
+            color: C.soilSoft, fontWeight: 600, margin: "18px 0 10px" }}>
+            {tr("Add to menu", lang)}
+          </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+            {available.map((k) => (
+              <button key={k} onClick={() => add(k)} className="kBtn"
+                style={{ padding: "8px 14px", borderRadius: 99, fontFamily: "inherit", fontSize: 13,
+                  fontWeight: 600, cursor: "pointer", border: `1px dashed ${C.line}`,
+                  background: "transparent", color: C.soil }}>
+                + {tr(TAB_META[k]?.label || k, lang)}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+    </Card>
+  );
+}
+
+function SettingsView({ profile, setProfile, exportData, importData, navTabs, setNavTabs, theme, setTheme, dark, setDark, lang, setLang, onReset }) {
   const [name, setName] = useState(profile.name || "");
   const [birth, setBirth] = useState(profile.birth || "");
   const [lifeExp, setLifeExp] = useState(profile.lifeExp || 73);
@@ -3879,6 +3968,9 @@ function SettingsView({ profile, setProfile, exportData, importData, theme, setT
           </div>
         )}
       </Card>
+
+      {/* Main menu — pick which tabs live in the top bar */}
+      <MainMenuSettings navTabs={navTabs} setNavTabs={setNavTabs} lang={lang} />
 
       {/* Appearance — dark toggle + collapsible theme picker */}
       <Card style={{ marginTop: 18 }} delay={60}>
