@@ -1039,7 +1039,6 @@ function Main({ profile, setProfile, plans, setPlans, activePlan, setActivePlan,
             color: C.soil, fontFamily: "inherit", fontSize: 16, padding: 0 }}
           title="Open menu" aria-label="Open menu">
           <Glyph small /> KALA
-          <span style={{ fontSize: 11, color: C.soilSoft, letterSpacing: 0, marginLeft: 2 }}>▾</span>
         </button>
         <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap",
           justifyContent: "flex-end" }}>
@@ -1054,19 +1053,21 @@ function Main({ profile, setProfile, plans, setPlans, activePlan, setActivePlan,
       <LiveDateBar lang={lang} />
 
       {/* primary tabs — user-customizable via Settings */}
-      <div style={{ display: "flex", gap: 8, marginBottom: 28, borderBottom: `1px solid ${C.line}`,
+      <div style={{ display: "flex", gap: 8, marginBottom: 28,
         flexWrap: "wrap", alignItems: "center" }}>
         {navTabs.map((key) => (
           <Tab key={key} active={tab === key} onClick={() => setTab(key)}>{tr(TAB_META[key]?.label || key, lang)}</Tab>
         ))}
-        {/* if a non-pinned tab is active, show it as a pill so the user isn't lost */}
+        {/* if a non-pinned tab is active, show it as a quiet pill that returns home on click */}
         {isSecondary && (
-          <span style={{ marginLeft: "auto", fontSize: 12.5, color: C.clay, fontWeight: 600,
-            display: "flex", alignItems: "center", gap: 6 }}>
+          <button onClick={() => setTab(navTabs[0])} className="kBtn"
+            title={tr("Back", lang)}
+            style={{ marginLeft: "auto", fontSize: 12.5, color: C.clay, fontWeight: 600,
+              display: "flex", alignItems: "center", gap: 6, background: "transparent",
+              border: "none", cursor: "pointer", fontFamily: "inherit", padding: 0 }}>
             {tr(activeLabel || "", lang)}
-            <button onClick={() => setTab(navTabs[0])} className="kBtn" style={{ background: "transparent",
-              border: "none", color: C.soilSoft, cursor: "pointer", fontSize: 15, padding: 0 }}>×</button>
-          </span>
+            <span style={{ color: C.soilSoft, fontSize: 15, lineHeight: 1 }}>×</span>
+          </button>
         )}
       </div>
 
@@ -4287,7 +4288,6 @@ function Tab({ children, active, onClick }) {
       fontFamily: "inherit", fontSize: 15, fontWeight: 600, cursor: "pointer",
       color: active ? C.clay : C.soilSoft,
       borderBottom: active ? `2px solid ${C.clay}` : "2px solid transparent",
-      marginBottom: -1,
     }}>{children}</button>
   );
 }
