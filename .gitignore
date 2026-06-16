@@ -1,0 +1,19 @@
+# Dependencies
+node_modules/
+
+# Build output (Vercel rebuilds this from source on deploy)
+dist/
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+npm-debug.log*
+
+# Editor / OS
+.DS_Store
+.vscode/
+.idea/
