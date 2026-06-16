@@ -514,7 +514,10 @@ function AuthScreen({ onGuest, onSignedIn }) {
   const [verifying, setVerifying] = useState(false);
   const [err, setErr] = useState("");
   const valid = /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email);
-  const codeValid = /^\d{6}$/.test(code.trim());
+  // Supabase email OTP length is configurable (6–10 digits), so accept any
+  // length in that range rather than hard-coding 6 — otherwise an 8-digit
+  // code from the email can't be entered.
+  const codeValid = /^\d{6,10}$/.test(code.trim());
 
   const signIn = async () => {
     if (!valid) return;
@@ -524,7 +527,7 @@ function AuthScreen({ onGuest, onSignedIn }) {
       onSignedIn(email.trim());
       return;
     }
-    // Email a 6-digit code (plus a backup link). The code is what makes
+    // Email a sign-in code (plus a backup link). The code is what makes
     // sign-in work inside a home-screen PWA on iOS, where the link would
     // otherwise open in Safari and leave the installed app logged out.
     setSent(true);
@@ -587,13 +590,13 @@ function AuthScreen({ onGuest, onSignedIn }) {
               color: C.soil, marginBottom: 10, textAlign: "center" }}>Check your inbox.</p>
             <p style={{ fontSize: 14, color: C.soilSoft, lineHeight: 1.6, marginBottom: 18,
               textAlign: "center" }}>
-              We sent a 6-digit code to <strong>{email}</strong>. Enter it below to sign in
+              We sent a sign-in code to <strong>{email}</strong>. Enter it below to sign in
               — no need to leave this app.
             </p>
             <div style={{ marginBottom: 10 }}>
               <Input type="text" inputMode="numeric" autoComplete="one-time-code"
-                pattern="\d*" maxLength={6} placeholder="123456" value={code}
-                onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                pattern="\d*" maxLength={10} placeholder="12345678" value={code}
+                onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 10))}
                 onKeyDown={(e) => { if (e.key === "Enter") verify(); }}
                 style={{ textAlign: "center", letterSpacing: ".4em", fontSize: 20 }} />
             </div>
