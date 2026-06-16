@@ -74,6 +74,53 @@ For the code to appear in the email:
    The `{{ .Token }}` is the 6-digit code. Keep `{{ .ConfirmationURL }}` too —
    it's a handy fallback when the email is opened in the same browser.
 
+## 7. (Required for production) Send the emails through Resend
+
+Supabase's built-in email service is rate-limited to a handful of messages per
+hour and is meant only for testing — in production, sign-in codes will silently
+stop arriving. Point Supabase at **Resend** (custom SMTP) so emails are sent
+reliably from your own domain. KALA sends from **`no-reply@kala.knsl.tech`**.
+
+### 7a. Verify the sending domain in Resend
+
+1. Sign up at [resend.com](https://resend.com).
+2. **Domains → Add Domain** → enter `kala.knsl.tech`.
+3. Resend shows a set of DNS records (the exact values are unique to your
+   account — copy them from the Resend dashboard, don't hand-copy these):
+   - an **MX** record + **SPF** `TXT` record on a `send.` subdomain
+     (return-path),
+   - a **DKIM** `TXT` record (`resend._domainkey…`),
+   - (optional but recommended) a **DMARC** `TXT` record.
+4. Add those records in the DNS for `knsl.tech` (Vercel DNS / your registrar),
+   then click **Verify** in Resend. Verification usually takes a few minutes
+   (can be longer while DNS propagates).
+
+### 7b. Create an API key
+
+1. Resend → **API Keys → Create API Key** (Sending access is enough).
+2. Copy the key (`re_…`). You'll paste it as the SMTP password below — it's
+   shown only once.
+
+### 7c. Enable custom SMTP in Supabase
+
+1. Supabase → **Project Settings → Authentication → SMTP Settings**.
+2. Turn on **Enable Custom SMTP** and enter:
+   ```
+   Host            = smtp.resend.com
+   Port            = 465        (or 587)
+   Username        = resend
+   Password        = re_…       (the Resend API key from 7b)
+   Sender email    = no-reply@kala.knsl.tech
+   Sender name     = KALA
+   ```
+3. Save. Under **Authentication → Rate Limits**, raise the email rate limit
+   from the default (it's intentionally tiny while on the built-in service).
+4. Send yourself a sign-in code from the app to confirm the email arrives from
+   `no-reply@kala.knsl.tech` and shows the 6-digit code.
+
+> The sender email's domain **must** be the one you verified in Resend
+> (`kala.knsl.tech`), or Resend will reject the message.
+
 ---
 
 ## How it behaves once connected
