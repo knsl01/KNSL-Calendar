@@ -18,6 +18,7 @@ export const PRIMARY_TABS = [
 export const SECONDARY_TABS = [
   { key: "calendar", label: "Calendar", desc: "Your month at a glance" },
   { key: "countdown", label: "Countdown", desc: "Count down to what matters" },
+  { key: "future", label: "Future Me", desc: "Write a letter to your future self" },
   { key: "people", label: "Time With", desc: "The moments you have left together" },
   { key: "memory", label: "Memory Timeline", desc: "Mark the moments that shaped you" },
   { key: "diary", label: "Diary", desc: "Write this week's page" },
@@ -35,6 +36,7 @@ export const TAB_META = {
   simulate: { label: "Simulate", desc: "Explore possible futures" },
   calendar: { label: "Calendar", desc: "Your month at a glance" },
   countdown: { label: "Countdown", desc: "Count down to what matters" },
+  future: { label: "Future Me", desc: "Write a letter to your future self" },
   people: { label: "Time With", desc: "The moments you have left together" },
   memory: { label: "Memory Timeline", desc: "Mark the moments that shaped you" },
   diary: { label: "Diary", desc: "Write this week's page" },
@@ -46,7 +48,7 @@ export const TAB_META = {
 // reachable from the side drawer, so it's intentionally not customizable.
 export const CUSTOMIZABLE_TABS = [
   "life", "reflect", "architect", "simulate",
-  "calendar", "countdown", "people", "memory", "diary", "wrapped",
+  "calendar", "countdown", "future", "people", "memory", "diary", "wrapped",
 ];
 // What the top bar shows until the user changes it.
 export const DEFAULT_NAV = ["life", "reflect", "architect", "simulate"];
