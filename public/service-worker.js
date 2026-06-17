@@ -45,7 +45,8 @@ self.addEventListener("push", (event) => {
       body: data.body,
       icon: "/icon.png",
       badge: "/icon.png",
-      tag: "kala-weekly-nudge",
+      // weekly nudge by default; Future Me letters pass their own tag
+      tag: data.tag || "kala-weekly-nudge",
     })
   );
 });

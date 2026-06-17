@@ -155,6 +155,55 @@ Rules:
 }
 
 
+// ---- AI REFLECTION for an opened letter (Future Me) ----
+// Compares who the user was when they sealed the letter with who they are now.
+// Graceful fallback to a warm template is handled by the caller.
+async function generateLetterReflectionAI(letter, profile, age, nowNote) {
+  const sealed = letter.createdAt ? new Date(letter.createdAt).toISOString().slice(0, 10) : "some time ago";
+  const today = new Date().toISOString().slice(0, 10);
+  const sys = `You are KALA, a warm, wise companion. A person sealed a letter to their future self and it has just been opened.
+Write a short reflection (2 to 4 sentences, max 75 words) that gently compares who they were when they sealed it with who they are now.
+Rules:
+- Be tender and specific to THEIR words — not generic platitudes.
+- Address them directly as "you".
+- Write in the SAME language as the letter's message.
+- No greeting, no signature, no markdown, no quotation marks around the whole thing.`;
+  const ctx = `Letter title: ${letter.title || "(untitled)"}
+Sealed on: ${sealed}. Opened today: ${today}.
+What they wrote to their future self:
+"""${letter.message || ""}"""
+Life targets they hoped for: ${(letter.targets || []).filter(Boolean).join("; ") || "(none listed)"}
+${nowNote ? `Where they say they are now: """${nowNote}"""` : ""}
+They are now about ${age} years old.`;
+
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: "claude-sonnet-4-6",
+      max_tokens: 400,
+      system: sys,
+      messages: [{ role: "user", content: ctx }],
+    }),
+  });
+  if (!res.ok) throw new Error("api " + res.status);
+  const data = await res.json();
+  const text = (data.content || [])
+    .filter((b) => b.type === "text").map((b) => b.text).join("").trim();
+  if (!text) throw new Error("empty");
+  return text;
+}
+
+// Local fallback when the AI call can't run — still warm, still personal.
+function localLetterReflection(letter, days) {
+  const span = days >= 360 ? "a whole year" : days >= 60 ? "months" : "weeks";
+  const had = (letter.targets || []).filter(Boolean).length;
+  const targetLine = had
+    ? `You set out hoping for ${had === 1 ? "one thing" : `${had} things`}. Look honestly at how far each has come — progress rarely looks the way we pictured it.`
+    : "You may not have named your hopes back then, but you were already carrying them.";
+  return `${span === "a whole year" ? "A whole year" : `Some ${span}`} ago you sat down and trusted your future self with these words. ${targetLine} Whatever has changed, the person who wrote this would be glad you came back to read it.`;
+}
+
 function generateRoadmap(goal, currentAge) {
   const g = goal.toLowerCase();
   const startYear = new Date().getFullYear();
@@ -222,6 +271,9 @@ export default function KalaApp() {
   const [lastSeenWeek, setLastSeenWeek] = useState(null);
   const [people, setPeople] = useState([]); // [{id,name,relation,theirAge,theirLifeExp,perYear}]
   const [countdowns, setCountdowns] = useState([]); // [{id,title,date}]
+  // Future Me — sealed letters to the future self. Each:
+  // {id,title,message,photo,targets[],createdAt,openDate,opened,openedAt,reflection,nowNote,targetStatus{}}
+  const [letters, setLetters] = useState([]);
   const [navTabs, setNavTabsRaw] = useState([...DEFAULT_NAV]); // tab keys pinned to the top bar
   const setNavTabs = (n) => setNavTabsRaw(sanitizeNav(typeof n === "function" ? n(navTabs) : n));
 
@@ -247,6 +299,7 @@ export default function KalaApp() {
         setWeekly(saved.weekly || {});
         setPeople(saved.people || []);
         setCountdowns(saved.countdowns || []);
+        setLetters(saved.letters || []);
         setNavTabsRaw(sanitizeNav(saved.navTabs));
         setLastSeenWeek(saved.lastSeenWeek || null);
         if (saved.theme) setTheme(saved.theme);
@@ -286,17 +339,17 @@ export default function KalaApp() {
     if (stage !== "app") return;
     clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => {
-      saveState({ profile, plans, activePlan, memories, diary, weekly, lastSeenWeek, people, countdowns, navTabs, theme, dark, lang, account });
+      saveState({ profile, plans, activePlan, memories, diary, weekly, lastSeenWeek, people, countdowns, letters, navTabs, theme, dark, lang, account });
     }, 600);
     return () => clearTimeout(saveTimer.current);
-  }, [stage, profile, plans, activePlan, memories, diary, weekly, lastSeenWeek, people, countdowns, navTabs, theme, dark, lang, account]);
+  }, [stage, profile, plans, activePlan, memories, diary, weekly, lastSeenWeek, people, countdowns, letters, navTabs, theme, dark, lang, account]);
 
   const resetAll = async () => {
     await clearState();
     setProfile({ name: "", birth: "", lifeExp: 73, focus: [], intention: "" });
     setPlans([{ id: 1, name: "Plan A", steps: [] }]);
     setActivePlan(1);
-    setMemories([]); setDiary([]); setWeekly({}); setPeople([]); setCountdowns([]);
+    setMemories([]); setDiary([]); setWeekly({}); setPeople([]); setCountdowns([]); setLetters([]);
     setNavTabsRaw([...DEFAULT_NAV]);
     setAccount(null);
     setStage("auth");
@@ -352,6 +405,7 @@ export default function KalaApp() {
           lastSeenWeek={lastSeenWeek} setLastSeenWeek={setLastSeenWeek}
           people={people} setPeople={setPeople}
           countdowns={countdowns} setCountdowns={setCountdowns}
+          letters={letters} setLetters={setLetters}
           navTabs={navTabs} setNavTabs={setNavTabs}
           theme={theme} setTheme={setTheme} dark={dark} setDark={setDark} lang={lang} setLang={setLang}
           onReset={resetAll} />
@@ -926,6 +980,7 @@ function Reveal({ profile, onDone }) {
 function Main({ profile, setProfile, plans, setPlans, activePlan, setActivePlan,
   memories, setMemories, diary, setDiary, weekly, setWeekly,
   lastSeenWeek, setLastSeenWeek, people, setPeople, countdowns, setCountdowns,
+  letters, setLetters,
   navTabs, setNavTabs, theme, setTheme, dark, setDark, lang, setLang, onReset }) {
   const [tab, setTab] = useState("life");
   const [drawer, setDrawer] = useState(false);
@@ -941,7 +996,7 @@ function Main({ profile, setProfile, plans, setPlans, activePlan, setActivePlan,
   // ---- export / import all data (trust & portability) ----
   const exportData = () => {
     const payload = { _app: "KALA", _v: 1, exportedAt: new Date().toISOString(),
-      profile, plans, activePlan, memories, diary, weekly, people, countdowns, navTabs };
+      profile, plans, activePlan, memories, diary, weekly, people, countdowns, letters, navTabs };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -960,6 +1015,7 @@ function Main({ profile, setProfile, plans, setPlans, activePlan, setActivePlan,
       if (d.weekly) setWeekly(d.weekly);
       if (d.people) setPeople(d.people);
       if (d.countdowns) setCountdowns(d.countdowns);
+      if (d.letters) setLetters(d.letters);
       if (d.navTabs) setNavTabs(d.navTabs);
       return true;
     } catch { return false; }
@@ -1006,6 +1062,36 @@ function Main({ profile, setProfile, plans, setPlans, activePlan, setActivePlan,
   const editStep = (stepId, patch) => {
     setRoadmap((prev) => prev.map((s) => s.id === stepId ? { ...s, ...patch } : s));
   };
+
+  // ---- Future Me: sealed letters ----
+  const addLetter = (l) => setLetters((ls) => [...ls, l]);
+  const removeLetter = (id) => setLetters((ls) => ls.filter((l) => l.id !== id));
+  const updateLetter = (id, patch) => setLetters((ls) =>
+    ls.map((l) => (l.id === id ? { ...l, ...patch } : l)));
+
+  // the letter currently being opened (envelope reveal overlay)
+  const [revealing, setRevealing] = useState(null);
+  // letters whose day has come and that haven't been opened yet
+  const dueLetters = useMemo(() => {
+    const today = dateKey(new Date());
+    return (letters || []).filter((l) => !l.opened && l.openDate && l.openDate <= today);
+  }, [letters]);
+  // fire a gentle OS notification once per letter per session when it's due
+  const notifiedRef = useRef(new Set());
+  useEffect(() => {
+    if (!dueLetters.length) return;
+    if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
+    dueLetters.forEach((l) => {
+      if (notifiedRef.current.has(l.id)) return;
+      notifiedRef.current.add(l.id);
+      const body = l.title ? `"${l.title}" is ready to open in KALA.` : "It's ready to open in KALA.";
+      navigator.serviceWorker?.ready
+        ?.then((reg) => reg.showNotification("A letter from your past self has arrived", {
+          body, icon: "/icon.png", badge: "/icon.png", tag: "kala-letter-" + l.id,
+        }))
+        .catch(() => {});
+    });
+  }, [dueLetters]);
 
   // weekly goals for current week
   const wk = currentWeekKey();
@@ -1096,11 +1182,15 @@ function Main({ profile, setProfile, plans, setPlans, activePlan, setActivePlan,
           <SimulateView age={age} lifeExp={profile.lifeExp} />
         )}
         {tab === "calendar" && (
-          <CalendarView countdowns={countdowns} memories={memories} lang={lang}
-            goToCountdown={() => setTab("countdown")} />
+          <CalendarView countdowns={countdowns} memories={memories} letters={letters} lang={lang}
+            goToCountdown={() => setTab("countdown")} goToFuture={() => setTab("future")} />
         )}
         {tab === "countdown" && (
           <CountdownView countdowns={countdowns} setCountdowns={setCountdowns} lang={lang} />
+        )}
+        {tab === "future" && (
+          <FutureMeView letters={letters} addLetter={addLetter} removeLetter={removeLetter}
+            onOpenLetter={(l) => setRevealing(l)} lang={lang} />
         )}
         {tab === "people" && (
           <PeopleView people={people} setPeople={setPeople} lang={lang} />
@@ -1145,6 +1235,19 @@ function Main({ profile, setProfile, plans, setPlans, activePlan, setActivePlan,
           doneCount={roadmap.filter((s) => s.done).length}
           totalCount={roadmap.length}
           onClose={() => setCelebrate(null)} />
+      )}
+
+      {/* A letter from the past has come due — gentle toast, unless already reading one */}
+      {!revealing && dueLetters.length > 0 && (
+        <LetterArrivedToast letter={dueLetters[0]} extra={dueLetters.length - 1} lang={lang}
+          onOpen={() => { setTab("future"); setRevealing(dueLetters[0]); }} />
+      )}
+
+      {/* The envelope-opening reveal — the heart of Future Me */}
+      {revealing && (
+        <LetterRevealModal letter={revealing} profile={profile} age={age} lang={lang}
+          onSaved={(patch) => updateLetter(revealing.id, patch)}
+          onClose={() => setRevealing(null)} />
       )}
     </div>
   );
@@ -3577,6 +3680,19 @@ function dateKey(d) {
 function isSameDay(a, b) {
   return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
 }
+// Add whole months/years to today and return a "YYYY-MM-DD" key (local time).
+function dateKeyFromNow({ months = 0, years = 0 } = {}) {
+  const d = new Date();
+  d.setMonth(d.getMonth() + months);
+  d.setFullYear(d.getFullYear() + years);
+  return dateKey(d);
+}
+// Whole days between two "YYYY-MM-DD" keys (b - a), ignoring time-of-day.
+function daysBetweenKeys(aKey, bKey) {
+  const a = parseLocalDate(aKey), b = parseLocalDate(bKey);
+  if (!a || !b) return 0;
+  return Math.round((b - a) / 86400000);
+}
 
 // ---------- COUNTDOWN VIEW ----------
 function CountdownView({ countdowns, setCountdowns, lang }) {
@@ -3748,19 +3864,680 @@ function AddCountdown({ onAdd, onCancel, lang }) {
   );
 }
 
+// =================================================================
+// FUTURE ME — letters to your future self
+// Write a letter, seal it with an open date, and KALA keeps it locked
+// until that day arrives — then opens it with an envelope ceremony and
+// an AI reflection that holds your past hopes against your present.
+// =================================================================
+
+// Downscale a chosen photo so a base64 letter stays light in storage.
+function resizeImageFile(file, max = 1000) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        let { width, height } = img;
+        if (width > max || height > max) {
+          const s = max / Math.max(width, height);
+          width = Math.round(width * s);
+          height = Math.round(height * s);
+        }
+        const canvas = document.createElement("canvas");
+        canvas.width = width; canvas.height = height;
+        canvas.getContext("2d").drawImage(img, 0, 0, width, height);
+        try { resolve(canvas.toDataURL("image/jpeg", 0.82)); }
+        catch (e) { reject(e); }
+      };
+      img.onerror = reject;
+      img.src = reader.result;
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+function Textarea({ style, ...p }) {
+  return (
+    <textarea {...p} style={{
+      width: "100%", boxSizing: "border-box", display: "block", minHeight: 110,
+      padding: "13px 15px", borderRadius: 12, border: `1px solid ${C.line}`,
+      background: C.bg, color: C.soil, fontFamily: "'Fraunces',serif",
+      fontSize: 16, lineHeight: 1.6, resize: "vertical", outline: "none", ...style,
+    }}
+    onFocus={(e) => (e.target.style.borderColor = C.clay)}
+    onBlur={(e) => (e.target.style.borderColor = C.line)} />
+  );
+}
+
+function FutureMeView({ letters, addLetter, removeLetter, onOpenLetter, lang }) {
+  const [adding, setAdding] = useState((letters || []).length === 0);
+  const today = dateKey(new Date());
+
+  // ready-to-open first, then still-sealed (soonest first), then already-opened.
+  const sorted = useMemo(() => {
+    const rank = (l) => {
+      if (l.opened) return 2;
+      if (l.openDate && l.openDate <= today) return 0; // due, unopened
+      return 1; // sealed
+    };
+    return [...(letters || [])].sort((a, b) => {
+      const ra = rank(a), rb = rank(b);
+      if (ra !== rb) return ra - rb;
+      if (ra === 2) return (b.openedAt || "").localeCompare(a.openedAt || ""); // newest opened first
+      return (a.openDate || "").localeCompare(b.openDate || ""); // soonest first
+    });
+  }, [letters, today]);
+
+  return (
+    <div>
+      <Card>
+        <Eyebrow>Future Me</Eyebrow>
+        <h2 style={{ fontFamily: "'Fraunces',serif", fontWeight: 500,
+          fontSize: "clamp(22px,4vw,30px)", lineHeight: 1.2, letterSpacing: "-.01em",
+          margin: "10px 0 8px" }}>
+          Write to the person<br /><em style={{ fontStyle: "italic", color: C.clay }}>you're becoming.</em>
+        </h2>
+        <p style={{ color: C.soilSoft, fontSize: 15, lineHeight: 1.6 }}>
+          Seal a letter to your future self — your hopes, a photo, the life you're aiming
+          for. KALA locks it away and counts down on your calendar. When the day comes,
+          it opens with a little ceremony and reflects on how far you've travelled.
+        </p>
+      </Card>
+
+      {sorted.map((l, i) => (
+        <SealedLetterCard key={l.id} letter={l} delay={i * 60} lang={lang}
+          onOpen={() => onOpenLetter(l)} onRemove={() => removeLetter(l.id)} />
+      ))}
+
+      {adding ? (
+        <SealLetterForm lang={lang}
+          onSeal={(l) => { addLetter(l); setAdding(false); }}
+          onCancel={(letters || []).length > 0 ? () => setAdding(false) : null} />
+      ) : (
+        <div style={{ marginTop: 16 }}>
+          <Btn onClick={() => setAdding(true)}>+ {tr("Seal a letter", lang)}</Btn>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SealLetterForm({ onSeal, onCancel, lang }) {
+  const [title, setTitle] = useState("");
+  const [message, setMessage] = useState("");
+  const [photo, setPhoto] = useState("");
+  const [targets, setTargets] = useState([""]);
+  const [preset, setPreset] = useState("year"); // month | year | custom
+  const [customDate, setCustomDate] = useState("");
+  const [busy, setBusy] = useState(false);
+  const fileRef = useRef(null);
+
+  const today = dateKey(new Date());
+  const openDate = preset === "month" ? dateKeyFromNow({ months: 1 })
+    : preset === "year" ? dateKeyFromNow({ years: 1 })
+    : customDate;
+  const futureOK = openDate && openDate > today;
+  const valid = title.trim() && message.trim() && futureOK;
+
+  const setTargetAt = (i, v) => setTargets((t) => t.map((x, k) => (k === i ? v : x)));
+  const addTarget = () => setTargets((t) => [...t, ""]);
+  const removeTarget = (i) => setTargets((t) => (t.length > 1 ? t.filter((_, k) => k !== i) : t));
+
+  const pickPhoto = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setBusy(true);
+    try { setPhoto(await resizeImageFile(file)); }
+    catch { /* ignore a bad image */ }
+    finally { setBusy(false); }
+  };
+
+  const seal = () => {
+    if (!valid) return;
+    // A natural moment to ask for notification permission, so the future
+    // arrival can reach the user even when the tab is in the background.
+    if (typeof Notification !== "undefined" && Notification.permission === "default") {
+      try { Notification.requestPermission(); } catch { /* ignore */ }
+    }
+    onSeal({
+      id: Date.now(),
+      title: title.trim(),
+      message: message.trim(),
+      photo: photo || "",
+      targets: targets.map((t) => t.trim()).filter(Boolean),
+      createdAt: new Date().toISOString(),
+      openDate,
+      opened: false,
+    });
+  };
+
+  const presetBtn = (key, label) => (
+    <button onClick={() => setPreset(key)} className="kBtn"
+      style={{ padding: "9px 15px", borderRadius: 99, fontFamily: "inherit", fontSize: 13.5,
+        fontWeight: 600, cursor: "pointer",
+        border: `1px solid ${preset === key ? C.clay : C.line}`,
+        background: preset === key ? C.clay : "transparent",
+        color: preset === key ? C.paper : C.soil }}>
+      {label}
+    </button>
+  );
+
+  const opensLabel = futureOK
+    ? parseLocalDate(openDate).toLocaleDateString(lang === "id" ? "id-ID" : "en-US",
+      { weekday: "long", day: "numeric", month: "long", year: "numeric" })
+    : null;
+
+  return (
+    <div className="kCard kFadeUp" style={cardStyle({ marginTop: 16 })}>
+      <h3 style={{ fontFamily: "'Fraunces',serif", fontWeight: 500, fontSize: 19, marginBottom: 16 }}>
+        {tr("A letter to your future self", lang)}
+      </h3>
+
+      <div style={{ display: "grid", gap: 16 }}>
+        <div>
+          <Label>{tr("Title", lang)}</Label>
+          <Input value={title} onChange={(e) => setTitle(e.target.value)}
+            placeholder="e.g. Dear me at 30" />
+        </div>
+
+        <div>
+          <Label>{tr("Message", lang)}</Label>
+          <Textarea value={message} onChange={(e) => setMessage(e.target.value)}
+            placeholder="What do you want to remember? What are you hoping for? Write freely…" />
+        </div>
+
+        <div>
+          <Label>{tr("Photo", lang)} · {tr("optional", lang)}</Label>
+          {photo ? (
+            <div style={{ position: "relative", display: "inline-block" }}>
+              <img src={photo} alt="" style={{ maxWidth: "100%", maxHeight: 220, borderRadius: 12,
+                border: `1px solid ${C.line}`, display: "block" }} />
+              <button onClick={() => setPhoto("")} className="kBtn"
+                style={{ position: "absolute", top: 8, right: 8, background: "rgba(28,21,16,.7)",
+                  color: "#F4ECDD", border: "none", borderRadius: 99, width: 28, height: 28,
+                  cursor: "pointer", fontSize: 16, lineHeight: 1 }}>×</button>
+            </div>
+          ) : (
+            <button onClick={() => fileRef.current?.click()} className="kBtn" disabled={busy}
+              style={{ padding: "11px 16px", borderRadius: 12, border: `1px dashed ${C.line}`,
+                background: "transparent", color: C.soilSoft, cursor: "pointer",
+                fontFamily: "inherit", fontSize: 13.5, fontWeight: 600 }}>
+              {busy ? "Adding…" : "+ Add a photo"}
+            </button>
+          )}
+          <input ref={fileRef} type="file" accept="image/*" onChange={pickPhoto}
+            style={{ display: "none" }} />
+        </div>
+
+        <div>
+          <Label>{tr("Life targets", lang)} · {tr("optional", lang)}</Label>
+          <div style={{ display: "grid", gap: 8 }}>
+            {targets.map((t, i) => (
+              <div key={i} style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <Input value={t} onChange={(e) => setTargetAt(i, e.target.value)}
+                  placeholder={`A hope for your life · ${i + 1}`} />
+                {targets.length > 1 && (
+                  <button onClick={() => removeTarget(i)} className="kBtn"
+                    style={{ background: "transparent", border: "none", color: C.soilSoft,
+                      cursor: "pointer", fontSize: 18, flexShrink: 0, padding: "0 4px" }}>×</button>
+                )}
+              </div>
+            ))}
+          </div>
+          <button onClick={addTarget} className="kBtn"
+            style={{ marginTop: 8, background: "transparent", border: "none", color: C.clay,
+              fontWeight: 600, cursor: "pointer", fontFamily: "inherit", fontSize: 13, padding: 0 }}>
+            + {tr("Add target", lang)}
+          </button>
+        </div>
+
+        <div>
+          <Label>{tr("When should it open?", lang)}</Label>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            {presetBtn("month", tr("In 1 month", lang))}
+            {presetBtn("year", tr("In 1 year", lang))}
+            {presetBtn("custom", tr("Custom", lang))}
+          </div>
+          {preset === "custom" && (
+            <div style={{ marginTop: 10, maxWidth: 220 }}>
+              <Input type="date" min={dateKeyFromNow({ months: 0 })} value={customDate}
+                onChange={(e) => setCustomDate(e.target.value)} />
+            </div>
+          )}
+          {opensLabel && (
+            <p style={{ fontSize: 12.5, color: C.soilSoft, marginTop: 10, lineHeight: 1.5 }}>
+              🔒 {tr("Opens on", lang)} <strong style={{ color: C.clay }}>{opensLabel}</strong> ·
+              {" "}{fmt(daysBetweenKeys(today, openDate))} {tr("days", lang)} from now.
+            </p>
+          )}
+        </div>
+      </div>
+
+      <div style={{ display: "flex", gap: 8, marginTop: 20 }}>
+        <Btn small onClick={seal} disabled={!valid}>{tr("Seal it", lang)} ✦</Btn>
+        {onCancel && <Btn small variant="ghost" onClick={onCancel}>{tr("Cancel", lang)}</Btn>}
+      </div>
+    </div>
+  );
+}
+
+function SealedLetterCard({ letter, onOpen, onRemove, delay, lang }) {
+  const now = useNow(1000);
+  const today = dateKey(now);
+  const locale = lang === "id" ? "id-ID" : "en-US";
+  const opensOn = parseLocalDate(letter.openDate);
+  const isOpened = !!letter.opened;
+  const isDue = !isOpened && letter.openDate && letter.openDate <= today;
+
+  // live countdown to opening (only meaningful while still sealed)
+  let target = opensOn ? new Date(opensOn.getFullYear(), opensOn.getMonth(), opensOn.getDate(), 0, 0, 0, 0) : null;
+  const ms = target ? target - now : 0;
+  const days = Math.max(0, Math.floor(ms / 86400000));
+  const hours = Math.max(0, Math.floor((ms % 86400000) / 3600000));
+  const mins = Math.max(0, Math.floor((ms % 3600000) / 60000));
+
+  const dateStr = opensOn ? opensOn.toLocaleDateString(locale, { day: "numeric", month: "long", year: "numeric" }) : "—";
+  const accent = isDue ? C.amber : isOpened ? C.soilSoft : C.clay;
+
+  return (
+    <div className="kCard kFadeUp" style={cardStyle({ marginTop: 16, animationDelay: `${delay}ms`,
+      opacity: isOpened ? 0.85 : 1,
+      border: isDue ? `1px solid ${C.amber}` : `1px solid ${C.line}`,
+      boxShadow: isDue ? `0 0 0 1px ${C.amber}, 0 18px 40px -28px rgba(46,32,24,.5)` : undefined })}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
+        <div style={{ display: "flex", gap: 12, alignItems: "flex-start", minWidth: 0 }}>
+          <span style={{ fontSize: 22, lineHeight: 1.1, color: accent, flexShrink: 0 }}>
+            {isOpened ? "📖" : isDue ? "✉" : "🔒"}
+          </span>
+          <div style={{ minWidth: 0 }}>
+            <h3 style={{ fontFamily: "'Fraunces',serif", fontWeight: 600, fontSize: 20, lineHeight: 1.2 }}>
+              {letter.title || tr("A letter to your future self", lang)}
+            </h3>
+            <div style={{ fontSize: 12.5, color: C.soilSoft, marginTop: 4 }}>
+              {isOpened
+                ? `${tr("Sealed", lang)} ${letter.createdAt ? new Date(letter.createdAt).toLocaleDateString(locale, { day: "numeric", month: "short", year: "numeric" }) : "—"}`
+                : `${tr("Opens on", lang)} ${dateStr}`}
+            </div>
+          </div>
+        </div>
+        <button onClick={onRemove} className="kBtn" style={{ background: "transparent", border: "none",
+          color: C.soilSoft, cursor: "pointer", fontSize: 18, opacity: 0.4, padding: "0 4px",
+          flexShrink: 0 }}>×</button>
+      </div>
+
+      <div style={{ marginTop: 16, paddingTop: 16, borderTop: `1px solid ${C.line}` }}>
+        {isOpened ? (
+          <Btn small variant="ghost" onClick={onOpen}>{tr("Read again", lang)}</Btn>
+        ) : isDue ? (
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between",
+            gap: 12, flexWrap: "wrap" }}>
+            <span style={{ fontFamily: "'Fraunces',serif", fontWeight: 600, fontSize: 22, color: C.amber }}>
+              {tr("Ready to open", lang)} ✦
+            </span>
+            <Btn small onClick={onOpen}>{tr("Break the seal", lang)}</Btn>
+          </div>
+        ) : (
+          <div style={{ display: "flex", alignItems: "baseline", gap: 14, flexWrap: "wrap" }}>
+            <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+              <span style={{ fontFamily: "'Fraunces',serif", fontWeight: 600, fontSize: 34, color: C.clay, lineHeight: 1 }}>
+                {fmt(days)}
+              </span>
+              <span style={{ fontSize: 14, color: C.soil }}>{tr("days", lang)}</span>
+            </div>
+            <span style={{ fontSize: 13, color: C.soilSoft, fontVariantNumeric: "tabular-nums" }}>
+              {String(hours).padStart(2, "0")}h {String(mins).padStart(2, "0")}m {tr("Opens in", lang).toLowerCase()}
+            </span>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// The ceremony: a sealed envelope, a wax seal that breaks, a drift of light,
+// then the letter — and KALA's reflection on the distance travelled.
+function LetterRevealModal({ letter, profile, age, lang, onSaved, onClose }) {
+  const reduce = typeof window !== "undefined" &&
+    window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  // already-opened letters reopen straight to the page (no re-seal); fresh ones start sealed.
+  const [phase, setPhase] = useState(letter.opened ? "open" : "sealed");
+  const [reflection, setReflection] = useState(letter.reflection || "");
+  const [loadingRef, setLoadingRef] = useState(false);
+  const [nowNote, setNowNote] = useState(letter.nowNote || "");
+  const [targetStatus, setTargetStatus] = useState(letter.targetStatus || {});
+  const locale = lang === "id" ? "id-ID" : "en-US";
+
+  const sealedKey = letter.createdAt ? dateKey(new Date(letter.createdAt)) : null;
+  const openedKey = letter.openedAt ? dateKey(new Date(letter.openedAt)) : dateKey(new Date());
+  const traveled = sealedKey ? Math.max(0, daysBetweenKeys(sealedKey, openedKey)) : 0;
+  const sealedStr = letter.createdAt
+    ? new Date(letter.createdAt).toLocaleDateString(locale, { day: "numeric", month: "long", year: "numeric" })
+    : "—";
+
+  // KALA-native keepsake: weeks of life lived then vs. now.
+  const birth = profile?.birth ? new Date(profile.birth) : null;
+  const weeksThen = birth && letter.createdAt ? Math.max(0, weeksBetween(birth, new Date(letter.createdAt))) : null;
+  const weeksNow = birth ? Math.max(0, weeksBetween(birth, new Date(letter.openedAt || Date.now()))) : null;
+
+  const runReflection = async (note) => {
+    setLoadingRef(true);
+    try {
+      const txt = await generateLetterReflectionAI(letter, profile, age, note);
+      setReflection(txt);
+    } catch {
+      setReflection(localLetterReflection(letter, traveled));
+    } finally {
+      setLoadingRef(false);
+    }
+  };
+
+  // When the page is revealed for the first time, fetch KALA's reflection once.
+  useEffect(() => {
+    if (phase === "open" && !reflection && !loadingRef) runReflection(nowNote);
+  }, [phase]);
+
+  const breakSeal = () => {
+    if (reduce) { setPhase("open"); return; }
+    setPhase("opening");
+    setTimeout(() => setPhase("open"), 1700);
+  };
+
+  const toggleTarget = (i) => setTargetStatus((s) => ({ ...s, [i]: !s[i] }));
+
+  const keep = () => {
+    onSaved({
+      opened: true,
+      openedAt: letter.openedAt || new Date().toISOString(),
+      reflection,
+      nowNote,
+      targetStatus,
+    });
+    onClose();
+  };
+
+  // a gentle drift of golden motes — the aesthetic surprise
+  const motes = reduce ? [] : Array.from({ length: 22 }, (_, i) => i);
+
+  return (
+    <div onClick={phase === "open" ? undefined : onClose}
+      style={{ position: "fixed", inset: 0, zIndex: 80, overflowY: "auto",
+        background: `radial-gradient(120% 90% at 50% -10%, ${C.clay} 0%, ${C.soil} 55%, #1C1510 110%)`,
+        display: "flex", alignItems: phase === "open" ? "flex-start" : "center",
+        justifyContent: "center", padding: 20, animation: "kFadeIn .45s ease" }}>
+      <style>{`
+        @keyframes kMoteFall{0%{transform:translateY(-12vh) rotate(0);opacity:0}
+          12%{opacity:.9}100%{transform:translateY(112vh) rotate(320deg);opacity:0}}
+        @keyframes kSealBreak{0%{transform:scale(1) rotate(0);opacity:1}
+          40%{transform:scale(1.18) rotate(-6deg)}100%{transform:scale(.2) rotate(18deg);opacity:0}}
+        @keyframes kFlapOpen{0%{transform:rotateX(0)}100%{transform:rotateX(-174deg)}}
+        @keyframes kLetterRise{0%{transform:translateY(36px) scale(.96);opacity:0}
+          100%{transform:translateY(-26px) scale(1);opacity:1}}
+        @keyframes kGlowPulse{0%,100%{opacity:.35}50%{opacity:.85}}
+        .kMote{position:fixed;top:0;border-radius:99px;pointer-events:none;
+          background:radial-gradient(circle,${C.amber} 0%,rgba(224,164,92,0) 70%)}
+      `}</style>
+
+      {/* drifting motes (rendered behind everything) */}
+      {(phase === "opening" || phase === "open") && motes.map((i) => {
+        const size = 5 + (i % 4) * 4;
+        return (
+          <span key={i} className="kMote" style={{
+            left: `${(i * 4.6) % 100}%`, width: size, height: size,
+            animation: `kMoteFall ${5 + (i % 5)}s linear ${(i % 7) * 0.4}s infinite`,
+          }} />
+        );
+      })}
+
+      {phase !== "open" ? (
+        // ---- SEALED / OPENING: the envelope ceremony ----
+        <div onClick={(e) => e.stopPropagation()} style={{ position: "relative", textAlign: "center",
+          maxWidth: 420, padding: 10 }}>
+          <div style={{ fontSize: 11.5, letterSpacing: ".28em", textTransform: "uppercase",
+            color: C.amber, fontWeight: 700, marginBottom: 18 }}>
+            {tr("Your letter has arrived", lang)}
+          </div>
+
+          {/* the envelope */}
+          <div style={{ width: 260, height: 174, margin: "0 auto 8px", position: "relative",
+            perspective: 800 }}>
+            {/* body */}
+            <div style={{ position: "absolute", inset: 0, borderRadius: 12,
+              background: `linear-gradient(160deg, #FBF5EC 0%, #EFE2CE 100%)`,
+              boxShadow: "0 30px 60px -24px rgba(0,0,0,.6)", overflow: "hidden" }}>
+              <div style={{ position: "absolute", left: 0, right: 0, bottom: 0, top: "46%",
+                background: "linear-gradient(180deg, rgba(138,74,44,.10), rgba(138,74,44,.04))",
+                clipPath: "polygon(0 0, 50% 46%, 100% 0, 100% 100%, 0 100%)" }} />
+            </div>
+            {/* letter peeking / rising out */}
+            {phase === "opening" && (
+              <div style={{ position: "absolute", left: 18, right: 18, top: 14, height: 150,
+                background: "#FFFDF7", borderRadius: 8, boxShadow: "0 10px 24px -10px rgba(0,0,0,.4)",
+                animation: "kLetterRise 1s ease .55s both" }} />
+            )}
+            {/* flap */}
+            <div style={{ position: "absolute", left: 0, right: 0, top: 0, height: "54%",
+              transformOrigin: "top center", transformStyle: "preserve-3d", zIndex: 3,
+              background: "linear-gradient(160deg, #F2E4CE 0%, #E2CFAE 100%)",
+              clipPath: "polygon(0 0, 100% 0, 50% 100%)",
+              animation: phase === "opening" ? "kFlapOpen .7s cubic-bezier(.5,0,.4,1) forwards" : "none" }} />
+            {/* wax seal */}
+            <div style={{ position: "absolute", left: "50%", top: "44%", transform: "translate(-50%,-50%)",
+              zIndex: 4, width: 52, height: 52, borderRadius: 99,
+              background: `radial-gradient(circle at 35% 30%, ${C.amber}, ${C.clay})`,
+              boxShadow: "0 6px 16px -4px rgba(0,0,0,.5), inset 0 0 0 2px rgba(255,255,255,.15)",
+              display: "flex", alignItems: "center", justifyContent: "center",
+              animation: phase === "opening" ? "kSealBreak .6s ease forwards" : "none" }}>
+              <Glyph small />
+            </div>
+          </div>
+
+          {phase === "sealed" && (
+            <>
+              <p style={{ color: "rgba(244,236,221,.82)", fontSize: 14.5, lineHeight: 1.6,
+                margin: "18px auto 4px", maxWidth: 340 }}>
+                {tr("This letter traveled", lang)}{" "}
+                <strong style={{ color: C.amber }}>{fmt(traveled)} {tr("days", lang)}</strong>{" "}
+                {tr("to reach you", lang)}.
+              </p>
+              <button onClick={breakSeal} className="kBtn" style={{ marginTop: 18, background: C.amber,
+                border: "none", borderRadius: 99, padding: "13px 30px", fontFamily: "inherit",
+                fontSize: 15, fontWeight: 700, color: "#1C1510", cursor: "pointer" }}>
+                {tr("Break the seal", lang)} ✦
+              </button>
+              <div style={{ marginTop: 16 }}>
+                <button onClick={onClose} className="kBtn" style={{ background: "transparent",
+                  border: "none", color: "rgba(244,236,221,.55)", cursor: "pointer",
+                  fontFamily: "inherit", fontSize: 13 }}>{tr("Cancel", lang)}</button>
+              </div>
+            </>
+          )}
+        </div>
+      ) : (
+        // ---- OPEN: the letter page ----
+        <div onClick={(e) => e.stopPropagation()} className="kFadeUp"
+          style={{ width: "min(560px,96vw)", margin: "24px 0 60px", borderRadius: 20,
+            background: `linear-gradient(180deg, #FFFDF7 0%, #FBF4E7 100%)`, color: "#2E2018",
+            boxShadow: "0 50px 100px -30px rgba(0,0,0,.7)", overflow: "hidden", position: "relative" }}>
+          <button onClick={onClose} className="kBtn" style={{ position: "absolute", top: 12, right: 12,
+            background: "rgba(46,32,24,.08)", border: "none", borderRadius: 99, width: 32, height: 32,
+            cursor: "pointer", fontSize: 18, color: "#6B5644", zIndex: 2 }}>×</button>
+
+          <div style={{ padding: "30px 28px 28px" }}>
+            <div style={{ fontSize: 11, letterSpacing: ".22em", textTransform: "uppercase",
+              color: C.clay, fontWeight: 700 }}>
+              {tr("Sealed", lang)} {sealedStr} · {tr("This letter traveled", lang).toLowerCase()} {fmt(traveled)} {tr("days", lang)}
+            </div>
+
+            <h2 style={{ fontFamily: "'Fraunces',serif", fontWeight: 500, fontSize: "clamp(24px,5vw,34px)",
+              lineHeight: 1.16, letterSpacing: "-.01em", margin: "12px 0 6px", color: "#2E2018" }}>
+              {letter.title || "A letter to yourself"}
+            </h2>
+
+            {/* Then / Now keepsake */}
+            {weeksThen != null && weeksNow != null && (
+              <div style={{ display: "flex", gap: 18, alignItems: "center", margin: "14px 0 4px",
+                padding: "12px 14px", borderRadius: 12, background: "rgba(138,74,44,.06)" }}>
+                <ThenNow n={fmt(weeksThen)} l="weeks then" />
+                <span style={{ color: C.clay, fontSize: 18 }}>→</span>
+                <ThenNow n={fmt(weeksNow)} l="weeks now" />
+                <span style={{ marginLeft: "auto", fontSize: 12.5, color: "#6B5644", textAlign: "right" }}>
+                  +{fmt(Math.max(0, weeksNow - weeksThen))}<br />weeks of life
+                </span>
+              </div>
+            )}
+
+            {letter.photo && (
+              <img src={letter.photo} alt="" style={{ width: "100%", borderRadius: 12, margin: "16px 0 4px",
+                border: "1px solid rgba(46,32,24,.12)", display: "block" }} />
+            )}
+
+            {/* the message — your past words */}
+            <div style={{ margin: "18px 0 6px", fontSize: 11, letterSpacing: ".16em",
+              textTransform: "uppercase", color: "#9A816B", fontWeight: 700 }}>From you, then</div>
+            <p style={{ fontFamily: "'Fraunces',serif", fontSize: 17, lineHeight: 1.7, whiteSpace: "pre-wrap",
+              color: "#2E2018" }}>{letter.message}</p>
+
+            {/* what you hoped for — tap to mark what came true */}
+            {(letter.targets || []).length > 0 && (
+              <div style={{ marginTop: 22 }}>
+                <div style={{ fontSize: 11, letterSpacing: ".16em", textTransform: "uppercase",
+                  color: "#9A816B", fontWeight: 700, marginBottom: 10 }}>
+                  {tr("What you hoped for", lang)}
+                </div>
+                <div style={{ display: "grid", gap: 8 }}>
+                  {letter.targets.map((t, i) => {
+                    const done = !!targetStatus[i];
+                    return (
+                      <button key={i} onClick={() => toggleTarget(i)} className="kBtn"
+                        style={{ display: "flex", alignItems: "center", gap: 11, textAlign: "left",
+                          padding: "11px 13px", borderRadius: 11, cursor: "pointer", fontFamily: "inherit",
+                          border: `1px solid ${done ? C.sage : "rgba(46,32,24,.14)"}`,
+                          background: done ? "rgba(92,107,71,.12)" : "rgba(255,255,255,.5)" }}>
+                        <span style={{ width: 20, height: 20, borderRadius: 6, flexShrink: 0,
+                          display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13,
+                          color: "#FFFDF7", background: done ? C.sage : "transparent",
+                          border: done ? "none" : "1.5px solid rgba(46,32,24,.3)" }}>
+                          {done ? "✓" : ""}
+                        </span>
+                        <span style={{ fontSize: 14.5, color: "#2E2018",
+                          textDecoration: done ? "none" : "none", fontWeight: 500 }}>{t}</span>
+                        {done && <span style={{ marginLeft: "auto", fontSize: 11, color: C.sage,
+                          fontWeight: 700, letterSpacing: ".06em" }}>CAME TRUE</span>}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* KALA's reflection */}
+            <div style={{ marginTop: 24, padding: "18px 18px", borderRadius: 14,
+              background: "linear-gradient(160deg, #2E2018, #43301F)", color: "#F4ECDD" }}>
+              <div style={{ fontSize: 11, letterSpacing: ".2em", textTransform: "uppercase",
+                color: C.amber, fontWeight: 700, marginBottom: 10 }}>
+                {tr("A note from KALA", lang)}
+              </div>
+              {loadingRef ? (
+                <p style={{ fontSize: 14.5, lineHeight: 1.7, opacity: 0.7,
+                  animation: "kGlowPulse 1.4s ease infinite" }}>
+                  Holding your past words against today…
+                </p>
+              ) : (
+                <p style={{ fontFamily: "'Fraunces',serif", fontSize: 16, lineHeight: 1.7,
+                  whiteSpace: "pre-wrap" }}>{reflection}</p>
+              )}
+
+              <div style={{ marginTop: 16 }}>
+                <div style={{ fontSize: 12, color: "rgba(244,236,221,.6)", marginBottom: 7 }}>
+                  {tr("Where are you now?", lang)}
+                </div>
+                <textarea value={nowNote} onChange={(e) => setNowNote(e.target.value)}
+                  placeholder="A line about your life today…"
+                  style={{ width: "100%", boxSizing: "border-box", minHeight: 58, padding: "10px 12px",
+                    borderRadius: 10, border: "1px solid rgba(244,236,221,.2)", background: "rgba(0,0,0,.18)",
+                    color: "#F4ECDD", fontFamily: "'Fraunces',serif", fontSize: 14.5, lineHeight: 1.6,
+                    resize: "vertical", outline: "none" }} />
+                <button onClick={() => runReflection(nowNote)} disabled={loadingRef} className="kBtn"
+                  style={{ marginTop: 10, background: C.amber, border: "none", borderRadius: 99,
+                    padding: "9px 18px", fontFamily: "inherit", fontSize: 13, fontWeight: 700,
+                    color: "#1C1510", cursor: loadingRef ? "not-allowed" : "pointer", opacity: loadingRef ? 0.5 : 1 }}>
+                  Reflect again ✦
+                </button>
+              </div>
+            </div>
+
+            <div style={{ display: "flex", gap: 10, marginTop: 22 }}>
+              <button onClick={keep} className="kBtn" style={{ background: C.clay, border: "none",
+                borderRadius: 99, padding: "13px 26px", fontFamily: "inherit", fontSize: 14.5,
+                fontWeight: 700, color: "#FFFDF7", cursor: "pointer" }}>
+                {tr("Keep this letter", lang)}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ThenNow({ n, l }) {
+  return (
+    <div style={{ textAlign: "center" }}>
+      <div style={{ fontFamily: "'Fraunces',serif", fontWeight: 600, fontSize: 22, lineHeight: 1, color: C.clay }}>{n}</div>
+      <div style={{ fontSize: 10, letterSpacing: ".1em", textTransform: "uppercase", color: "#9A816B", marginTop: 4 }}>{l}</div>
+    </div>
+  );
+}
+
+// A quiet toast when a letter comes due — bottom of the screen, easy to ignore.
+function LetterArrivedToast({ letter, extra, onOpen, lang }) {
+  return (
+    <div className="kFadeUp" style={{ position: "fixed", left: "50%", bottom: 22,
+      transform: "translateX(-50%)", zIndex: 55, width: "min(440px,94vw)",
+      background: `linear-gradient(160deg, ${C.soil}, #43301F)`, color: "#F4ECDD",
+      borderRadius: 16, padding: "14px 16px", boxShadow: "0 30px 60px -24px rgba(0,0,0,.6)",
+      display: "flex", alignItems: "center", gap: 14 }}>
+      <span style={{ fontSize: 24, flexShrink: 0 }}>✉</span>
+      <div style={{ minWidth: 0, flex: 1 }}>
+        <div style={{ fontSize: 11, letterSpacing: ".18em", textTransform: "uppercase",
+          color: C.amber, fontWeight: 700 }}>{tr("Your letter has arrived", lang)}</div>
+        <div style={{ fontSize: 14, marginTop: 2, overflow: "hidden", textOverflow: "ellipsis",
+          whiteSpace: "nowrap" }}>
+          {letter.title || tr("A letter to your future self", lang)}
+          {extra > 0 && <span style={{ color: "rgba(244,236,221,.6)" }}> +{extra} more</span>}
+        </div>
+      </div>
+      <button onClick={onOpen} className="kBtn" style={{ background: C.amber, border: "none",
+        borderRadius: 99, padding: "9px 16px", fontFamily: "inherit", fontSize: 13, fontWeight: 700,
+        color: "#1C1510", cursor: "pointer", flexShrink: 0 }}>
+        {tr("Break the seal", lang)}
+      </button>
+    </div>
+  );
+}
+
 // ---------- CALENDAR VIEW ----------
-function CalendarView({ countdowns, lang, goToCountdown }) {
+function CalendarView({ countdowns, letters, lang, goToCountdown, goToFuture }) {
   const now = useNow(60000); // a minute is plenty for a calendar
   const [cursor, setCursor] = useState(() => new Date(now.getFullYear(), now.getMonth(), 1));
   const [selected, setSelected] = useState(() => dateKey(now));
   const locale = lang === "id" ? "id-ID" : "en-US";
 
-  // countdowns grouped by their date key
+  // countdowns + sealed letters grouped by their date key. A sealed letter
+  // shows up as its own countdown event on the day it unlocks.
   const byDate = useMemo(() => {
     const m = {};
     (countdowns || []).forEach((c) => { (m[c.date] ||= []).push(c); });
+    (letters || []).forEach((l) => {
+      if (!l.openDate) return;
+      (m[l.openDate] ||= []).push({
+        id: "letter-" + l.id, title: l.title || "A letter to yourself", _letter: true,
+      });
+    });
     return m;
-  }, [countdowns]);
+  }, [countdowns, letters]);
 
   const year = cursor.getFullYear(), month = cursor.getMonth();
   const firstDay = new Date(year, month, 1).getDay(); // 0=Sun
@@ -3832,9 +4609,10 @@ function CalendarView({ countdowns, lang, goToCountdown }) {
                 <span style={{ fontSize: 13.5, fontWeight: today ? 700 : 500,
                   color: today ? C.paper : C.soil }}>{d.getDate()}</span>
                 <span style={{ display: "flex", gap: 2, height: 5 }}>
-                  {events.slice(0, 3).map((_, k) => (
+                  {events.slice(0, 3).map((ev, k) => (
                     <span key={k} style={{ width: 5, height: 5, borderRadius: 99,
-                      background: today ? C.paper : C.clay, opacity: today ? 0.9 : 1 }} />
+                      background: today ? C.paper : ev._letter ? C.amber : C.clay,
+                      opacity: today ? 0.9 : 1 }} />
                   ))}
                 </span>
               </button>
@@ -3851,11 +4629,19 @@ function CalendarView({ countdowns, lang, goToCountdown }) {
         </div>
         {selectedEvents.length > 0 ? (
           selectedEvents.map((c) => (
-            <div key={c.id} className="kRow" style={{ display: "flex", alignItems: "center", gap: 12,
-              padding: "12px 0", borderBottom: `1px solid ${C.line}` }}>
-              <span style={{ width: 9, height: 9, borderRadius: 99, background: C.clay, flexShrink: 0 }} />
+            <div key={c.id} onClick={c._letter ? goToFuture : undefined} className="kRow"
+              style={{ display: "flex", alignItems: "center", gap: 12,
+                padding: "12px 0", borderBottom: `1px solid ${C.line}`,
+                cursor: c._letter ? "pointer" : "default" }}>
+              {c._letter ? (
+                <span style={{ fontSize: 13, color: C.amber, flexShrink: 0, width: 9, textAlign: "center" }}>✉</span>
+              ) : (
+                <span style={{ width: 9, height: 9, borderRadius: 99, background: C.clay, flexShrink: 0 }} />
+              )}
               <span style={{ fontSize: 15, fontWeight: 600, color: C.soil }}>{c.title}</span>
-              {c.time && <span style={{ marginLeft: "auto", fontSize: 12.5, color: C.soilSoft,
+              {c._letter && <span style={{ marginLeft: "auto", fontSize: 11.5, letterSpacing: ".1em",
+                textTransform: "uppercase", color: C.amber, fontWeight: 600 }}>{tr("Future Me", lang)}</span>}
+              {!c._letter && c.time && <span style={{ marginLeft: "auto", fontSize: 12.5, color: C.soilSoft,
                 fontVariantNumeric: "tabular-nums" }}>{c.time}</span>}
             </div>
           ))
