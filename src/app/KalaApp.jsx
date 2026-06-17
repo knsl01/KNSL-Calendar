@@ -439,10 +439,17 @@ function parseShareHash() {
 // C drone — warm and calming rather than tense or melancholic.
 const KALA_SCALES = {
   default:  [261.63, 293.66, 329.63, 392.00, 440.00, 523.25],          // C4 pentatonic
+  // "main" — the home/menu theme. A warm, singable pentatonic across a
+  // comfortable mid register, played with stepwise melodic motion and a
+  // slower, more spacious tempo: a calm Joe-Hisaishi / Ghibli lilt.
+  main:     [196.00, 220.00, 261.63, 293.66, 329.63, 392.00, 440.00],  // G3→A4, nostalgic
   reflect:  [196.00, 220.00, 261.63, 293.66, 329.63],                  // lower, warm
   wrapped:  [196.00, 261.63, 293.66, 329.63, 392.00],                  // mid, rounded
   simulate: [329.63, 392.00, 440.00, 523.25, 587.33, 659.25],          // airy, higher
 };
+// Scales whose notes should wander stepwise (like a hummed melody) instead of
+// leaping randomly — and breathe with a slower, calmer tempo.
+const KALA_MELODIC = new Set(["main"]);
 
 function useKALAAudio() {
   const ctxRef = useRef(null);
@@ -452,6 +459,7 @@ function useKALAAudio() {
   const timerRef = useRef(null);
   const playingRef = useRef(false);
   const scaleRef = useRef("default");
+  const melodyIdxRef = useRef(0); // current position when walking a melodic scale
 
   const getCtx = () => {
     if (!ctxRef.current) {
@@ -514,18 +522,39 @@ function useKALAAudio() {
   const scheduleNotes = (firstImmediate) => {
     if (!playingRef.current) return;
     const ctx = getCtx();
-    const scale = KALA_SCALES[scaleRef.current] || KALA_SCALES.default;
-    if (firstImmediate || Math.random() > 0.45) {
-      const freq = scale[Math.floor(Math.random() * scale.length)];
-      const octave = Math.random() > 0.85 ? 2 : 1;
-      playNote(ctx, freq * octave);
+    const name = scaleRef.current;
+    const scale = KALA_SCALES[name] || KALA_SCALES.default;
+    const melodic = KALA_MELODIC.has(name);
+
+    // Melodic scales wander stepwise (a gentle, hummed line); others sparkle
+    // randomly. The home theme also plays more often and stays grounded
+    // (no high-octave doubling) so it reads as a calm tune, not chimes.
+    const willPlay = firstImmediate || Math.random() > (melodic ? 0.18 : 0.45);
+    if (willPlay) {
+      let idx;
+      if (melodic) {
+        // mostly move ±1 step, occasionally rest in place or take a small leap
+        const r = Math.random();
+        const step = r < 0.6 ? (Math.random() < 0.5 ? -1 : 1)
+          : r < 0.78 ? 0
+          : (Math.random() < 0.5 ? -2 : 2);
+        idx = Math.max(0, Math.min(scale.length - 1, melodyIdxRef.current + step));
+        melodyIdxRef.current = idx;
+      } else {
+        idx = Math.floor(Math.random() * scale.length);
+      }
+      const octave = !melodic && Math.random() > 0.85 ? 2 : 1;
+      playNote(ctx, scale[idx] * octave);
     }
-    const delay = 4000 + Math.random() * 4500;
+
+    // calmer, more spacious breathing for the home theme
+    const delay = melodic ? 4800 + Math.random() * 4200 : 4000 + Math.random() * 4500;
     timerRef.current = setTimeout(() => scheduleNotes(false), delay);
   };
 
-  const play = (scaleName = "default") => {
-    scaleRef.current = scaleName;
+  const play = (scaleName) => {
+    // keep whatever scale the active tab selected unless one is passed explicitly
+    if (scaleName) scaleRef.current = scaleName;
     if (playingRef.current) return;
     playingRef.current = true;
     const ctx = getCtx();
@@ -552,7 +581,14 @@ function useKALAAudio() {
     }
   };
 
-  const setScale = (name) => { scaleRef.current = name; };
+  const setScale = (name) => {
+    // entering a melodic theme: start the line from a warm middle register
+    if (KALA_MELODIC.has(name) && !KALA_MELODIC.has(scaleRef.current)) {
+      const len = (KALA_SCALES[name] || []).length;
+      melodyIdxRef.current = Math.floor(len / 2);
+    }
+    scaleRef.current = name;
+  };
   const isPlaying = () => playingRef.current;
 
   return { play, pause, setScale, isPlaying };
@@ -988,7 +1024,7 @@ function Main({ profile, setProfile, plans, setPlans, activePlan, setActivePlan,
 
   // change ambient scale when tab changes
   useEffect(() => {
-    const map = { reflect: "reflect", wrapped: "wrapped", simulate: "simulate" };
+    const map = { life: "main", reflect: "reflect", wrapped: "wrapped", simulate: "simulate" };
     audio.setScale(map[tab] || "default");
   }, [tab]);
   const wkNow = currentWeekKey();
