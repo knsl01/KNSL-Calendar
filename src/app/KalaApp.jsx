@@ -3739,6 +3739,7 @@ function FamilyView({ family, setFamily, people, setPeople, profile, goToPeople,
     const id = member.id;
     const childSet = new Set(links?.children || []);
     const partnerSet = new Set(links?.partners || []);
+    const siblingSet = new Set(links?.siblings || []);
     return list.map((m) => {
       if (m.id === id) return member;
       let mm = m;
@@ -3748,6 +3749,10 @@ function FamilyView({ family, setFamily, people, setPeople, profile, goToPeople,
       const isPartner = (mm.partners || []).includes(id);
       if (partnerSet.has(mm.id) && !isPartner) mm = { ...mm, partners: [...(mm.partners || []), id] };
       else if (!partnerSet.has(mm.id) && isPartner) mm = { ...mm, partners: (mm.partners || []).filter((x) => x !== id) };
+      // siblings share parents: give the sibling any parents this member has
+      if (siblingSet.has(mm.id) && (member.parents || []).length) {
+        mm = { ...mm, parents: [...new Set([...(mm.parents || []), ...member.parents])] };
+      }
       return mm;
     });
   };
@@ -4032,6 +4037,10 @@ function MemberDetail({ member, family, people, onEdit, onRemove, onClose, onNot
   const partners = (member.partners || [])
     .map((id) => family.find((m) => m.id === id)).filter(Boolean);
   const children = family.filter((m) => (m.parents || []).includes(member.id));
+  const siblings = (member.parents || []).length
+    ? family.filter((m) => m.id !== member.id
+        && (m.parents || []).some((p) => (member.parents || []).includes(p)))
+    : [];
   const linked = member.linkedPersonId
     ? people.find((p) => p.id === member.linkedPersonId)
     : null;
@@ -4065,6 +4074,12 @@ function MemberDetail({ member, family, people, onEdit, onRemove, onClose, onNot
           <span style={{ color: C.soilSoft }}>Descends from: </span>
           {parents.length ? parents.map((p) => p.name).join(" & ") : <em style={{ color: C.soilSoft }}>not recorded</em>}
         </div>
+        {siblings.length > 0 && (
+          <div>
+            <span style={{ color: C.soilSoft }}>Brothers & sisters: </span>
+            {siblings.map((s) => s.name).join(", ")}
+          </div>
+        )}
         {children.length > 0 && (
           <div>
             <span style={{ color: C.soilSoft }}>Continues through: </span>
@@ -4199,6 +4214,11 @@ function AddFamilyMember({ initial, family, profile, onSave, onCancel }) {
     initial ? family.filter((m) => (m.parents || []).includes(initial.id)).map((m) => m.id) : []
   );
   const [partners, setPartners] = useState(initial?.partners || []);
+  // siblings — people who share a parent with this person
+  const [siblingSel, setSiblingSel] = useState(
+    initial ? family.filter((m) => m.id !== initial.id
+      && (m.parents || []).some((p) => (initial.parents || []).includes(p))).map((m) => m.id) : []
+  );
   const [note, setNote] = useState(initial?.note || "");
   const [alsoTrack, setAlsoTrack] = useState(false);
 
@@ -4221,14 +4241,22 @@ function AddFamilyMember({ initial, family, profile, onSave, onCancel }) {
   const toggleParent = (id) => setParents((p) => {
     if (p.includes(id)) return p.filter((x) => x !== id);
     setChildrenSel((c) => c.filter((x) => x !== id));
+    setSiblingSel((s) => s.filter((x) => x !== id));
     return [...p, id];
   });
   const toggleChild = (id) => setChildrenSel((c) => {
     if (c.includes(id)) return c.filter((x) => x !== id);
     setParents((p) => p.filter((x) => x !== id));
+    setSiblingSel((s) => s.filter((x) => x !== id));
     return [...c, id];
   });
   const togglePartner = (id) => setPartners((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
+  const toggleSibling = (id) => setSiblingSel((s) => {
+    if (s.includes(id)) return s.filter((x) => x !== id);
+    setParents((p) => p.filter((x) => x !== id));
+    setChildrenSel((c) => c.filter((x) => x !== id));
+    return [...s, id];
+  });
 
   const byInt = (v) => (v ? parseInt(v, 10) : null);
   const valid =
@@ -4240,6 +4268,9 @@ function AddFamilyMember({ initial, family, profile, onSave, onCancel }) {
     if (!valid) return;
     const roleDef = familyRole(role);
     const id = initial?.id ?? Date.now();
+    // siblings share parents: inherit any parents the chosen siblings already have
+    const sibParents = siblingSel.flatMap((sid) => family.find((m) => m.id === sid)?.parents || []);
+    const finalParents = [...new Set([...parents, ...sibParents])];
     const member = {
       ...(initial || { linkedPersonId: null }),
       id,
@@ -4248,11 +4279,11 @@ function AddFamilyMember({ initial, family, profile, onSave, onCancel }) {
       birthYear: byInt(birthYear),
       deathYear: alive ? null : byInt(deathYear),
       lifeExp: role === "self" && profile?.lifeExp ? profile.lifeExp : roleDef.defaultExp,
-      parents,
+      parents: finalParents,
       partners,
       note: note.trim(),
     };
-    onSave(member, { children: childrenSel, partners }, alsoTrack && alive);
+    onSave(member, { children: childrenSel, partners, siblings: siblingSel }, alsoTrack && alive);
   };
 
   return (
@@ -4342,6 +4373,14 @@ function AddFamilyMember({ initial, family, profile, onSave, onCancel }) {
               candidates={candidates}
               selected={childrenSel}
               onToggle={toggleChild}
+            />
+            <MemberPicker
+              label="Sibling of"
+              hint="— shares their parents (brother / sister)"
+              candidates={candidates}
+              selected={siblingSel}
+              onToggle={toggleSibling}
+              accent={C.sage}
             />
           </div>
         )}
