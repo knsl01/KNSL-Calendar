@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo, useLayoutEffect } from "react";
+import React, { useState, useEffect, useRef, useMemo } from "react";
 import { THEME_DEFS, buildPalette } from "@/lib/themes";
 import { loadState, saveState, clearState, migrateLocalToCloud } from "@/lib/storage";
 import { cloudEnabled } from "@/lib/supabase";
@@ -6,7 +6,7 @@ import { sendMagicLink, verifyEmailCode, getUser, onAuthChange, signOut } from "
 import { WEEKS_PER_YEAR, weeksBetween, fmt, currentWeekKey } from "@/lib/helpers";
 import {
   AREAS, LIFE_SEASONS, RELATIONS,
-  FAMILY_ROLES, familyRole, computeGenerations, layoutGenerations,
+  FAMILY_ROLES, familyRole, computeGenerations, layoutGenerations, computeTreeLayout,
   WEEKLY_PROMPTS, weekPromptIndex,
   WRAPPED_THEMES, WRAPPED_HEADLINES, WRAPPED_CAPTIONS, WRAPPED_QUOTES,
   TAB_META, CUSTOMIZABLE_TABS, DEFAULT_NAV, sanitizeNav,
@@ -3705,7 +3705,7 @@ function FamilyView({ family, setFamily, people, setPeople, profile, goToPeople,
   const [mode, setMode] = useState(family.length === 0 ? "add" : null); // null | "add" | "edit"
   const [fullscreen, setFullscreen] = useState(false);
 
-  const { rows, levels } = useMemo(() => layoutGenerations(family), [family]);
+  const { levels } = useMemo(() => layoutGenerations(family), [family]);
   const generations = family.length ? Math.max(...family.map((m) => levels[m.id] ?? 0)) + 1 : 0;
   const living = family.filter((m) => m.deathYear == null).length;
   const passed = family.length - living;
@@ -3815,14 +3815,14 @@ function FamilyView({ family, setFamily, people, setPeople, profile, goToPeople,
               ⛶ {tr("View full tree", lang)}
             </button>
           </div>
-          <FamilyTree rows={rows} family={family} selectedId={selectedId}
+          <FamilyTree family={family} selectedId={selectedId}
             onSelect={(id) => { setSelectedId(id); setMode(null); }} />
         </div>
       )}
 
       {/* fullscreen silsilah */}
       {fullscreen && (
-        <FamilyTreeModal rows={rows} family={family} selectedId={selectedId} lang={lang}
+        <FamilyTreeModal family={family} selectedId={selectedId} lang={lang}
           onSelect={(id) => { setSelectedId(id); setMode(null); setFullscreen(false); }}
           onClose={() => setFullscreen(false)} />
       )}
@@ -3876,121 +3876,71 @@ function FamilyView({ family, setFamily, people, setPeople, profile, goToPeople,
   );
 }
 
-// The diagram: generations stacked top→bottom, with SVG curves drawn from each
-// parent down to each child. Positions are measured from the DOM so the lines
-// stay correct as the layout reflows or the user scrolls a wide tree.
-function FamilyTree({ rows, family, selectedId, onSelect, big }) {
-  const wrapRef = useRef(null);
-  const nodeRefs = useRef({});
-  const [lines, setLines] = useState([]);
-  const [size, setSize] = useState({ w: 0, h: 0 });
+// The diagram: every member is placed at a computed x/y so ancestors sit
+// directly above their own children, and soft curves fall from each couple
+// down to each child (a marriage bar joins partners).
+function FamilyTree({ family, selectedId, onSelect, big }) {
+  const layout = useMemo(() => computeTreeLayout(family), [family]);
+  const { positions: P, width, height, nodeW, nodeH } = layout;
 
-  const measure = () => {
-    const wrap = wrapRef.current;
-    if (!wrap) return;
-    const cRect = wrap.getBoundingClientRect();
-    const pos = {};
-    family.forEach((m) => {
-      const el = nodeRefs.current[m.id];
-      if (!el) return;
-      const r = el.getBoundingClientRect();
-      const left = r.left - cRect.left + wrap.scrollLeft;
-      const top = r.top - cRect.top + wrap.scrollTop;
-      pos[m.id] = { left, right: left + r.width, cx: left + r.width / 2,
-        top, bottom: top + r.height, cy: top + r.height / 2 };
-    });
-
-    const segs = [];
-
-    // marriage bars — a horizontal line joining two partners
-    const married = new Set();
-    const marry = (a, b) => {
-      if (!pos[a] || !pos[b]) return;
-      const lo = a < b ? a : b, hi = a < b ? b : a;
-      const key = "m" + lo + "-" + hi;
-      if (married.has(key)) return;
-      married.add(key);
-      const [L, R] = pos[a].cx <= pos[b].cx ? [pos[a], pos[b]] : [pos[b], pos[a]];
-      const y = (L.cy + R.cy) / 2;
-      segs.push({ key, x1: L.right, y1: y, x2: R.left, y2: y, marriage: true });
-    };
-    // explicit partners
-    family.forEach((m) => (m.partners || []).forEach((p) => marry(m.id, p)));
-    // co-parents of the same child
-    family.forEach((c) => {
-      const ps = (c.parents || []).filter((p) => pos[p]);
-      const sorted = [...ps].sort((a, b) => pos[a].cx - pos[b].cx);
-      for (let i = 0; i < sorted.length - 1; i++) marry(sorted[i], sorted[i + 1]);
-    });
-
-    // descent — group children by their parent-set, then drop one straight
-    // trunk down to a sibling bar and a short line into each child.
-    const groups = {};
-    family.forEach((c) => {
-      if (!pos[c.id]) return;
-      const ps = (c.parents || []).filter((p) => pos[p]);
-      if (!ps.length) return;
-      const k = [...ps].sort().join(",");
-      (groups[k] = groups[k] || { parents: ps, children: [] }).children.push(c.id);
-    });
-    Object.entries(groups).forEach(([k, g]) => {
-      const px = g.parents.reduce((s, p) => s + pos[p].cx, 0) / g.parents.length;
-      const py = Math.max(...g.parents.map((p) => pos[p].bottom));
-      const childXs = g.children.map((id) => pos[id].cx);
-      const busY = (py + Math.min(...g.children.map((id) => pos[id].top))) / 2;
-      // trunk down from the couple/parent to the sibling bar
-      segs.push({ key: k + "-trunk", x1: px, y1: py, x2: px, y2: busY });
-      // horizontal sibling bar spanning the children (and the trunk)
-      const minX = Math.min(px, ...childXs);
-      const maxX = Math.max(px, ...childXs);
-      if (maxX - minX > 0.5) segs.push({ key: k + "-bus", x1: minX, y1: busY, x2: maxX, y2: busY });
-      // short drop into each child
-      g.children.forEach((id) =>
-        segs.push({ key: k + "-c" + id, x1: pos[id].cx, y1: busY, x2: pos[id].cx, y2: pos[id].top }));
-    });
-
-    setLines(segs);
-    setSize({ w: wrap.scrollWidth, h: wrap.scrollHeight });
+  // marriage bars between partners / co-parents
+  const bars = [];
+  const drawn = new Set();
+  const marry = (a, b) => {
+    if (!P[a] || !P[b]) return;
+    const key = a < b ? a + "-" + b : b + "-" + a;
+    if (drawn.has(key)) return;
+    drawn.add(key);
+    const [L, R] = P[a].x <= P[b].x ? [P[a], P[b]] : [P[b], P[a]];
+    bars.push({ key, x1: L.x + nodeW / 2, x2: R.x - nodeW / 2, y: (L.y + R.y) / 2 + nodeH / 2 });
   };
+  family.forEach((m) => (m.partners || []).forEach((p) => marry(m.id, p)));
+  family.forEach((c) => {
+    const ps = (c.parents || []).filter((p) => P[p]);
+    for (let i = 0; i < ps.length; i++) for (let j = i + 1; j < ps.length; j++) marry(ps[i], ps[j]);
+  });
 
-  useLayoutEffect(() => {
-    measure();
-    const ro = new ResizeObserver(() => measure());
-    if (wrapRef.current) ro.observe(wrapRef.current);
-    window.addEventListener("resize", measure);
-    return () => { ro.disconnect(); window.removeEventListener("resize", measure); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rows, selectedId]);
+  // soft descent curves from the couple's midpoint down to each child
+  const curves = [];
+  family.forEach((c) => {
+    if (!P[c.id]) return;
+    const ps = (c.parents || []).filter((p) => P[p]);
+    if (!ps.length) return;
+    const ax = ps.reduce((s, p) => s + P[p].x, 0) / ps.length;
+    const ay = Math.max(...ps.map((p) => P[p].y)) + nodeH;
+    const cx = P[c.id].x, cy = P[c.id].y;
+    const midY = (ay + cy) / 2;
+    curves.push({ key: "d" + c.id, d: `M ${ax} ${ay} C ${ax} ${midY}, ${cx} ${midY}, ${cx} ${cy}` });
+  });
 
   return (
-    <div ref={wrapRef} style={{ position: "relative", overflow: "auto",
-      paddingBottom: 6, maxHeight: big ? "none" : 520 }}>
-      <svg width={size.w} height={size.h}
-        style={{ position: "absolute", top: 0, left: 0, pointerEvents: "none", overflow: "visible" }}>
-        {lines.map((l) => (
-          <line key={l.key} x1={l.x1} y1={l.y1} x2={l.x2} y2={l.y2}
-            stroke={l.marriage ? C.rose : C.clay} strokeOpacity={l.marriage ? 0.55 : 0.5}
-            strokeWidth={2} strokeLinecap="round" />
-        ))}
-      </svg>
-      <div style={{ position: "relative", display: "flex", flexDirection: "column",
-        gap: 52, minWidth: "min-content", padding: "4px 10px 0" }}>
-        {rows.map((row, i) => (
-          <div key={i} style={{ display: "flex", gap: 18, justifyContent: "center", minWidth: "min-content" }}>
-            {row.map((m) => (
-              <div key={m.id} ref={(el) => (nodeRefs.current[m.id] = el)}>
-                <FamilyNode member={m} selected={selectedId === m.id} onSelect={() => onSelect(m.id)} />
-              </div>
-            ))}
-          </div>
-        ))}
+    <div style={{ position: "relative", overflow: "auto", maxHeight: big ? "none" : 560 }}>
+      <div style={{ position: "relative", width, height, minWidth: "100%" }}>
+        <svg width={width} height={height}
+          style={{ position: "absolute", top: 0, left: 0, pointerEvents: "none" }}>
+          {curves.map((c) => (
+            <path key={c.key} d={c.d} fill="none" stroke={C.clay} strokeOpacity={0.5} strokeWidth={2} />
+          ))}
+          {bars.map((b) => (
+            <line key={b.key} x1={b.x1} y1={b.y} x2={b.x2} y2={b.y}
+              stroke={C.rose} strokeOpacity={0.6} strokeWidth={2} strokeLinecap="round" />
+          ))}
+        </svg>
+        {family.map((m) =>
+          P[m.id] ? (
+            <div key={m.id} style={{ position: "absolute", width: nodeW, height: nodeH,
+              left: P[m.id].x - nodeW / 2, top: P[m.id].y }}>
+              <FamilyNode member={m} selected={selectedId === m.id} onSelect={() => onSelect(m.id)} />
+            </div>
+          ) : null
+        )}
       </div>
     </div>
   );
 }
 
 // Fullscreen silsilah — a focused, scrollable view of the whole tree.
-function FamilyTreeModal({ rows, family, selectedId, onSelect, onClose, lang }) {
+function FamilyTreeModal({ family, selectedId, onSelect, onClose, lang }) {
   return (
     <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 60,
       background: "rgba(20,14,9,.55)", backdropFilter: "blur(3px)",
@@ -4009,7 +3959,7 @@ function FamilyTreeModal({ rows, family, selectedId, onSelect, onClose, lang }) 
           </button>
         </div>
         <div style={{ flex: 1, overflow: "auto", padding: "24px 16px" }}>
-          <FamilyTree rows={rows} family={family} selectedId={selectedId} onSelect={onSelect} big />
+          <FamilyTree family={family} selectedId={selectedId} onSelect={onSelect} big />
         </div>
       </div>
     </div>
@@ -4023,10 +3973,12 @@ function FamilyNode({ member, selected, onSelect }) {
     : passed ? C.soilSoft : C.sage;
   return (
     <button onClick={onSelect} className="kBtn" style={{
-      width: 134, textAlign: "center", cursor: "pointer", fontFamily: "inherit",
+      width: "100%", height: "100%", boxSizing: "border-box", textAlign: "center",
+      cursor: "pointer", fontFamily: "inherit", overflow: "hidden",
+      display: "flex", flexDirection: "column", justifyContent: "center",
       background: selected ? C.card : C.paper,
       border: `1.5px solid ${selected ? C.clay : C.line}`,
-      borderRadius: 14, padding: "12px 10px",
+      borderRadius: 14, padding: "10px 10px",
       boxShadow: selected ? `0 0 0 3px ${C.clay}22` : "0 10px 24px -20px rgba(46,32,24,.5)",
       opacity: passed ? 0.88 : 1 }}>
       <div style={{ fontSize: 18, color: accent, marginBottom: 2 }}>{role.icon}</div>
