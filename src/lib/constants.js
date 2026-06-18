@@ -208,6 +208,102 @@ export function layoutGenerations(members) {
   return { rows, levels };
 }
 
+// Turn the ordered rows into actual x/y coordinates. Leaves (the lowest
+// descendants) are spaced out left→right; every ancestor is then centred over
+// its own children — so a grandparent sits directly above the parent they had,
+// not floating between two in-laws. Returns pixel positions per member.
+export function computeTreeLayout(members, opts = {}) {
+  const NODE_W = opts.nodeW ?? 138;
+  const NODE_H = opts.nodeH ?? 98;
+  const V_GAP = opts.vGap ?? 58;
+  const COUPLE_GAP = opts.coupleGap ?? 14;
+  const UNIT_GAP = opts.unitGap ?? 30;
+  const MARGIN = opts.margin ?? 16;
+
+  const { rows, levels } = layoutGenerations(members);
+  const root = coupleRoots(members);
+  const byId = Object.fromEntries(members.map((m) => [m.id, m]));
+
+  // rebuild couple units from the ordered rows (couple members are adjacent)
+  const units = [];
+  const memIdx = {};
+  const unitOf = {};
+  rows.forEach((row, lvl) => {
+    let current = null;
+    row.forEach((m) => {
+      if (!current || root[current.members[0]] !== root[m.id]) {
+        current = { id: "u" + units.length, level: lvl, members: [], center: 0 };
+        units.push(current);
+      }
+      memIdx[m.id] = current.members.length;
+      current.members.push(m.id);
+      unitOf[m.id] = current;
+    });
+  });
+
+  const unitW = (u) => u.members.length * NODE_W + (u.members.length - 1) * COUPLE_GAP;
+  units.forEach((u) => { u.half = unitW(u) / 2; });
+  const maxLevel = units.reduce((mx, u) => Math.max(mx, u.level), 0);
+  const byLevel = [];
+  for (let l = 0; l <= maxLevel; l++) byLevel.push(units.filter((u) => u.level === l));
+
+  const memberX = (id) => {
+    const u = unitOf[id];
+    return u.center - unitW(u) / 2 + NODE_W / 2 + memIdx[id] * (NODE_W + COUPLE_GAP);
+  };
+
+  // each unit's children (members whose parents fall inside the unit)
+  const childMembersOf = {};
+  units.forEach((u) => {
+    const set = new Set(u.members);
+    childMembersOf[u.id] = members
+      .filter((m) => (m.parents || []).some((p) => set.has(p)))
+      .map((m) => m.id);
+  });
+
+  // initial spread, left to right, per level
+  byLevel.forEach((row) => {
+    let cursor = MARGIN;
+    row.forEach((u) => { u.center = cursor + u.half; cursor += unitW(u) + UNIT_GAP; });
+  });
+
+  const resolveRow = (row) => {
+    const sorted = [...row].sort((a, b) => a.center - b.center);
+    for (let i = 1; i < sorted.length; i++) {
+      const min = sorted[i - 1].center + sorted[i - 1].half + UNIT_GAP + sorted[i].half;
+      if (sorted[i].center < min) sorted[i].center = min;
+    }
+  };
+
+  // centre each ancestor over its children (bottom-up); a couple of sweeps
+  for (let pass = 0; pass < 3; pass++) {
+    for (let l = maxLevel - 1; l >= 0; l--) {
+      byLevel[l].forEach((u) => {
+        const kids = childMembersOf[u.id];
+        if (kids.length) u.center = kids.reduce((s, id) => s + memberX(id), 0) / kids.length;
+      });
+      resolveRow(byLevel[l]);
+    }
+  }
+
+  // normalise so the leftmost node starts at the margin
+  const positions = {};
+  members.forEach((m) => { if (unitOf[m.id]) positions[m.id] = { x: memberX(m.id), y: 0 }; });
+  const xs = Object.values(positions).map((p) => p.x);
+  const shift = xs.length ? MARGIN + NODE_W / 2 - Math.min(...xs) : 0;
+  let width = MARGIN, height = MARGIN;
+  members.forEach((m) => {
+    const p = positions[m.id];
+    if (!p) return;
+    p.x += shift;
+    p.y = MARGIN + (levels[m.id] ?? 0) * (NODE_H + V_GAP);
+    width = Math.max(width, p.x + NODE_W / 2 + MARGIN);
+    height = Math.max(height, p.y + NODE_H + MARGIN);
+  });
+
+  return { positions, width, height, nodeW: NODE_W, nodeH: NODE_H, levels };
+}
+
 export const WEEKLY_PROMPTS = [
   "What's one small thing you want to be true by next week?",
   "What mattered most to you this week?",
