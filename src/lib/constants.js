@@ -128,35 +128,44 @@ export function coupleRoots(members) {
   return root;
 }
 
-// Generation level from parent links, with couples pinned to the same level so
-// a married-in spouse (who has no recorded ancestry of their own) still sits
-// beside their partner. Roots sit at 0; each descending generation one below.
+// Generation of every member, derived from the relationships themselves: a
+// parent is always exactly one row above their child, and partners share a row.
+// Because levels are relative (not "distance from the topmost person"), a
+// great-grandparent lands one row above the grandparent — even if the other
+// side of the family has no ancestors recorded that far back.
 export function computeGenerations(members) {
-  const byId = Object.fromEntries(members.map((m) => [m.id, m]));
-  const root = coupleRoots(members);
-  const groupMembers = {};
-  members.forEach((m) => { (groupMembers[root[m.id]] = groupMembers[root[m.id]] || []).push(m.id); });
+  const idSet = new Set(members.map((m) => m.id));
+  const adj = {};
+  members.forEach((m) => { adj[m.id] = []; });
+  const edge = (a, b, off) => {
+    if (!idSet.has(a) || !idSet.has(b) || a === b) return;
+    adj[a].push({ to: b, off });
+    adj[b].push({ to: a, off: -off });
+  };
+  members.forEach((c) => {
+    const ps = (c.parents || []).filter((p) => idSet.has(p));
+    ps.forEach((p) => edge(p, c.id, 1));      // parent sits one row above child
+    for (let i = 0; i < ps.length; i++)        // co-parents share a row
+      for (let j = i + 1; j < ps.length; j++) edge(ps[i], ps[j], 0);
+  });
+  members.forEach((m) => (m.partners || []).forEach((p) => edge(m.id, p, 0)));
 
-  const groupMemo = {};
-  const visiting = new Set();
-  const baseLevel = (id) => {
-    const m = byId[id];
-    const ps = (m?.parents || []).filter((p) => byId[p]);
-    return ps.length ? Math.max(...ps.map((p) => groupLevel(p))) + 1 : 0;
-  };
-  const groupLevel = (id) => {
-    const r = root[id];
-    if (groupMemo[r] != null) return groupMemo[r];
-    if (visiting.has(r)) return 0; // defensive: broken/circular link
-    visiting.add(r);
-    const lv = Math.max(...groupMembers[r].map((mid) => baseLevel(mid)));
-    visiting.delete(r);
-    groupMemo[r] = lv;
-    return lv;
-  };
-  const memo = {};
-  members.forEach((m) => { memo[m.id] = groupLevel(m.id); });
-  return memo;
+  const level = {};
+  members.forEach((m) => {
+    if (level[m.id] != null) return;
+    level[m.id] = 0;
+    const queue = [m.id];
+    while (queue.length) {
+      const cur = queue.shift();
+      adj[cur].forEach(({ to, off }) => {
+        if (level[to] == null) { level[to] = level[cur] + off; queue.push(to); }
+      });
+    }
+  });
+  const min = members.length ? Math.min(...members.map((m) => level[m.id] ?? 0)) : 0;
+  const out = {};
+  members.forEach((m) => { out[m.id] = (level[m.id] ?? 0) - min; });
+  return out;
 }
 
 // Build the rows of the tree the way a genealogy chart reads:

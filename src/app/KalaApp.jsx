@@ -3704,6 +3704,26 @@ function FamilyView({ family, setFamily, people, setPeople, profile, goToPeople,
   const [selectedId, setSelectedId] = useState(null);
   const [mode, setMode] = useState(family.length === 0 ? "add" : null); // null | "add" | "edit"
   const [fullscreen, setFullscreen] = useState(false);
+  const [sharing, setSharing] = useState(false);
+
+  const shareTree = async () => {
+    setSharing(true);
+    try {
+      const blob = await renderFamilyTreeImage(family, profile, C);
+      const file = new File([blob], "kala-family-tree.png", { type: "image/png" });
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        await navigator.share({ files: [file], title: "My family tree",
+          text: "Our lineage — mapped with KALA." });
+      } else {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url; a.download = "kala-family-tree.png";
+        document.body.appendChild(a); a.click(); document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(url), 2000);
+      }
+    } catch (e) { console.error(e); }
+    setSharing(false);
+  };
 
   const { levels } = useMemo(() => layoutGenerations(family), [family]);
   const generations = family.length ? Math.max(...family.map((m) => levels[m.id] ?? 0)) + 1 : 0;
@@ -3808,12 +3828,21 @@ function FamilyView({ family, setFamily, people, setPeople, profile, goToPeople,
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center",
             marginBottom: 12, gap: 12, flexWrap: "wrap" }}>
             <Eyebrow>{tr("Family Tree", lang)}</Eyebrow>
-            <button onClick={() => setFullscreen(true)} className="kBtn"
-              style={{ background: "transparent", border: `1px solid ${C.line}`, borderRadius: 99,
-                padding: "8px 15px", cursor: "pointer", fontFamily: "inherit", fontSize: 12.5,
-                fontWeight: 600, color: C.clay, display: "flex", alignItems: "center", gap: 7 }}>
-              ⛶ {tr("View full tree", lang)}
-            </button>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <button onClick={() => setFullscreen(true)} className="kBtn"
+                style={{ background: "transparent", border: `1px solid ${C.line}`, borderRadius: 99,
+                  padding: "8px 15px", cursor: "pointer", fontFamily: "inherit", fontSize: 12.5,
+                  fontWeight: 600, color: C.clay, display: "flex", alignItems: "center", gap: 7 }}>
+                ⛶ {tr("View full tree", lang)}
+              </button>
+              <button onClick={shareTree} disabled={sharing} className="kBtn"
+                style={{ background: C.clay, border: "none", borderRadius: 99,
+                  padding: "8px 15px", cursor: sharing ? "default" : "pointer", fontFamily: "inherit",
+                  fontSize: 12.5, fontWeight: 600, color: C.paper, opacity: sharing ? 0.6 : 1,
+                  display: "flex", alignItems: "center", gap: 7 }}>
+                ↗ {sharing ? tr("Preparing…", lang) : tr("Share", lang)}
+              </button>
+            </div>
           </div>
           <FamilyTree family={family} selectedId={selectedId}
             onSelect={(id) => { setSelectedId(id); setMode(null); }} />
@@ -4339,6 +4368,118 @@ function AddFamilyMember({ initial, family, profile, onSave, onCancel }) {
       </div>
     </div>
   );
+}
+
+// A rounded-rectangle path helper for canvas (older browsers lack roundRect).
+function roundRectPath(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+// Render the whole family tree to a shareable PNG, themed to the current
+// palette — mirrors the way Wrapped exports its card.
+function renderFamilyTreeImage(family, profile, palette) {
+  return new Promise((resolve, reject) => {
+    const Cx = palette;
+    const { positions: P, width: w, height: h, nodeW, nodeH } = computeTreeLayout(family);
+    const SCALE = 2, TOP = 150, BOTTOM = 92, SIDE = 24;
+    const W = Math.max(760, w + SIDE * 2);
+    const H = h + TOP + BOTTOM;
+    const cv = document.createElement("canvas");
+    cv.width = W * SCALE; cv.height = H * SCALE;
+    const x = cv.getContext("2d");
+    x.scale(SCALE, SCALE);
+    const ox = (W - w) / 2;
+    const oy = TOP;
+    const clip = (s, n) => (s.length > n ? s.slice(0, n - 1) + "…" : s);
+
+    const draw = () => {
+      x.fillStyle = Cx.bg; x.fillRect(0, 0, W, H);
+
+      // header
+      x.textAlign = "left";
+      x.fillStyle = Cx.clay; x.font = "600 13px 'Jakarta', sans-serif";
+      x.fillText("FAMILY TREE", SIDE, 52);
+      x.fillStyle = Cx.soil; x.font = "500 30px 'Fraunces', serif";
+      x.fillText(profile?.name ? `${profile.name}’s lineage` : "Our lineage", SIDE, 92);
+      x.fillStyle = Cx.soilSoft; x.font = "400 14px 'Jakarta', sans-serif";
+      x.fillText(`${family.length} people · every life in weeks`, SIDE, 116);
+
+      // descent curves
+      x.strokeStyle = Cx.clay; x.lineWidth = 2; x.globalAlpha = 0.5;
+      family.forEach((c) => {
+        if (!P[c.id]) return;
+        const ps = (c.parents || []).filter((p) => P[p]);
+        if (!ps.length) return;
+        const ax = ps.reduce((s, p) => s + P[p].x, 0) / ps.length + ox;
+        const ay = Math.max(...ps.map((p) => P[p].y)) + nodeH + oy;
+        const cx = P[c.id].x + ox, cy = P[c.id].y + oy;
+        const midY = (ay + cy) / 2;
+        x.beginPath(); x.moveTo(ax, ay); x.bezierCurveTo(ax, midY, cx, midY, cx, cy); x.stroke();
+      });
+
+      // marriage bars
+      x.strokeStyle = Cx.rose; x.globalAlpha = 0.6;
+      const drawn = new Set();
+      const marry = (a, b) => {
+        if (!P[a] || !P[b]) return;
+        const k = a < b ? a + "-" + b : b + "-" + a;
+        if (drawn.has(k)) return; drawn.add(k);
+        const [L, R] = P[a].x <= P[b].x ? [P[a], P[b]] : [P[b], P[a]];
+        const yy = (L.y + R.y) / 2 + nodeH / 2 + oy;
+        x.beginPath(); x.moveTo(L.x + nodeW / 2 + ox, yy); x.lineTo(R.x - nodeW / 2 + ox, yy); x.stroke();
+      };
+      family.forEach((m) => (m.partners || []).forEach((p) => marry(m.id, p)));
+      family.forEach((c) => {
+        const ps = (c.parents || []).filter((p) => P[p]);
+        for (let i = 0; i < ps.length; i++) for (let j = i + 1; j < ps.length; j++) marry(ps[i], ps[j]);
+      });
+      x.globalAlpha = 1;
+
+      // node cards
+      family.forEach((m) => {
+        const p = P[m.id]; if (!p) return;
+        const nx = p.x - nodeW / 2 + ox, ny = p.y + oy;
+        const role = familyRole(m.role); const passed = m.deathYear != null;
+        x.globalAlpha = passed ? 0.9 : 1;
+        roundRectPath(x, nx, ny, nodeW, nodeH, 12);
+        x.fillStyle = Cx.paper; x.fill();
+        x.strokeStyle = Cx.line; x.lineWidth = 1.5; x.stroke();
+        const cx = nx + nodeW / 2;
+        const accent = m.role === "self" ? Cx.clay : m.role === "partner" ? Cx.rose
+          : passed ? Cx.soilSoft : Cx.sage;
+        x.textAlign = "center";
+        x.fillStyle = accent; x.font = "18px 'Jakarta', sans-serif";
+        x.fillText(role.icon, cx, ny + 27);
+        x.fillStyle = Cx.soil; x.font = "600 15px 'Fraunces', serif";
+        x.fillText(clip(m.name, 15), cx, ny + 50);
+        x.fillStyle = Cx.soilSoft; x.font = "400 11px 'Jakarta', sans-serif";
+        x.fillText(m.role === "self" ? "You" : role.label, cx, ny + 68);
+        x.fillText(yearsText(m), cx, ny + 84);
+        x.globalAlpha = 1;
+      });
+
+      // footer
+      x.textAlign = "left";
+      x.fillStyle = Cx.soilSoft; x.font = "600 12px 'Jakarta', sans-serif";
+      x.fillText("kala.knsl.tech · A product by KNSL", SIDE, H - 40);
+
+      cv.toBlob((b) => (b ? resolve(b) : reject(new Error("toBlob failed"))), "image/png");
+    };
+
+    if (document.fonts && document.fonts.ready) {
+      Promise.all([
+        document.fonts.load("500 30px 'Fraunces'"),
+        document.fonts.load("600 15px 'Fraunces'"),
+        document.fonts.load("400 12px 'Jakarta'"),
+      ]).then(draw).catch(draw);
+    } else draw();
+  });
 }
 
 // ---------- LIVE CLOCK / DATE ----------
