@@ -20,6 +20,7 @@ export const SECONDARY_TABS = [
   { key: "countdown", label: "Countdown", desc: "Count down to what matters" },
   { key: "future", label: "Future Me", desc: "Write a letter to your future self" },
   { key: "people", label: "Time With", desc: "The moments you have left together" },
+  { key: "family", label: "Family Tree", desc: "Your lineage, generation by generation" },
   { key: "memory", label: "Memory Timeline", desc: "Mark the moments that shaped you" },
   { key: "diary", label: "Diary", desc: "Write this week's page" },
   { key: "wrapped", label: "Wrapped", desc: "Your year, shareable" },
@@ -38,6 +39,7 @@ export const TAB_META = {
   countdown: { label: "Countdown", desc: "Count down to what matters" },
   future: { label: "Future Me", desc: "Write a letter to your future self" },
   people: { label: "Time With", desc: "The moments you have left together" },
+  family: { label: "Family Tree", desc: "Your lineage, generation by generation" },
   memory: { label: "Memory Timeline", desc: "Mark the moments that shaped you" },
   diary: { label: "Diary", desc: "Write this week's page" },
   wrapped: { label: "Wrapped", desc: "Your year, shareable" },
@@ -48,7 +50,7 @@ export const TAB_META = {
 // reachable from the side drawer, so it's intentionally not customizable.
 export const CUSTOMIZABLE_TABS = [
   "life", "reflect", "architect", "simulate",
-  "calendar", "countdown", "future", "people", "memory", "diary", "wrapped",
+  "calendar", "countdown", "future", "people", "family", "memory", "diary", "wrapped",
 ];
 // What the top bar shows until the user changes it.
 export const DEFAULT_NAV = ["life", "reflect", "architect", "simulate"];
@@ -80,6 +82,47 @@ export const RELATIONS = [
   { key: "grandparent", label: "Grandparent", defaultExp: 88, icon: "❀" },
   { key: "other", label: "Someone", defaultExp: 82, icon: "○" },
 ];
+
+// ---- Family Tree ----------------------------------------------------------
+// Roles a family member can hold. The role drives the icon, a sensible default
+// life expectancy, and how the member maps onto a "Time With" card. Lineage
+// itself is defined by parent links (member.parents[]), not by the role — so
+// "where someone descends from" is always explicit and never guessed.
+export const FAMILY_ROLES = [
+  { key: "self",        label: "You",         icon: "◈", defaultExp: 73, timeWith: null },
+  { key: "partner",     label: "Partner",     icon: "♥", defaultExp: 82, timeWith: "partner" },
+  { key: "parent",      label: "Parent",      icon: "❀", defaultExp: 80, timeWith: "parent" },
+  { key: "child",       label: "Child",       icon: "✿", defaultExp: 85, timeWith: "child" },
+  { key: "sibling",     label: "Sibling",     icon: "❖", defaultExp: 82, timeWith: "sibling" },
+  { key: "grandparent", label: "Grandparent", icon: "❀", defaultExp: 88, timeWith: "grandparent" },
+  { key: "grandchild",  label: "Grandchild",  icon: "✿", defaultExp: 86, timeWith: "other" },
+  { key: "other",       label: "Relative",    icon: "○", defaultExp: 80, timeWith: "other" },
+];
+
+export function familyRole(key) {
+  return FAMILY_ROLES.find((r) => r.key === key) || FAMILY_ROLES[FAMILY_ROLES.length - 1];
+}
+
+// Generation level from parent links: roots (ancestors with no recorded parent
+// in the set) sit at 0, each descending generation one below. Cycle-safe.
+export function computeGenerations(members) {
+  const byId = Object.fromEntries(members.map((m) => [m.id, m]));
+  const memo = {};
+  const visiting = new Set();
+  const level = (id) => {
+    if (memo[id] != null) return memo[id];
+    if (visiting.has(id)) return 0; // defensive: broken/circular link
+    visiting.add(id);
+    const m = byId[id];
+    const ps = (m?.parents || []).filter((p) => byId[p]);
+    const v = ps.length ? Math.max(...ps.map(level)) + 1 : 0;
+    visiting.delete(id);
+    memo[id] = v;
+    return v;
+  };
+  members.forEach((m) => level(m.id));
+  return memo;
+}
 
 export const WEEKLY_PROMPTS = [
   "What's one small thing you want to be true by next week?",
