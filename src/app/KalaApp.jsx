@@ -3710,33 +3710,68 @@ function FamilyView({ family, setFamily, people, setPeople, profile, goToPeople,
   const living = family.filter((m) => m.deathYear == null).length;
   const passed = family.length - living;
 
-  const addMember = (m, alsoTrack) => {
-    setFamily([...family, m]);
-    setMode(null);
-    setSelectedId(m.id);
-    if (alsoTrack) trackInTimeWith(m);
-  };
   const updateMember = (id, patch) =>
     setFamily(family.map((m) => (m.id === id ? { ...m, ...patch } : m)));
+
+  // Apply a member's relationships to everyone else: children get this member
+  // as a parent; partners are made mutual. Diffed so toggling links off works.
+  const applyMemberLinks = (list, member, links) => {
+    const id = member.id;
+    const childSet = new Set(links?.children || []);
+    const partnerSet = new Set(links?.partners || []);
+    return list.map((m) => {
+      if (m.id === id) return member;
+      let mm = m;
+      const isParent = (mm.parents || []).includes(id);
+      if (childSet.has(mm.id) && !isParent) mm = { ...mm, parents: [...(mm.parents || []), id] };
+      else if (!childSet.has(mm.id) && isParent) mm = { ...mm, parents: (mm.parents || []).filter((x) => x !== id) };
+      const isPartner = (mm.partners || []).includes(id);
+      if (partnerSet.has(mm.id) && !isPartner) mm = { ...mm, partners: [...(mm.partners || []), id] };
+      else if (!partnerSet.has(mm.id) && isPartner) mm = { ...mm, partners: (mm.partners || []).filter((x) => x !== id) };
+      return mm;
+    });
+  };
+
+  const saveMember = (member, links, isEdit, alsoTrack) => {
+    let m = member;
+    let newPerson = null;
+    if (!isEdit && alsoTrack && member.deathYear == null && member.role !== "self") {
+      const built = peopleEntryFor(member);
+      m = { ...member, linkedPersonId: built.pid };
+      newPerson = built.entry;
+    }
+    const base = isEdit ? family.map((x) => (x.id === m.id ? m : x)) : [...family, m];
+    setFamily(applyMemberLinks(base, m, links));
+    if (newPerson) setPeople([...people, newPerson]);
+    setMode(null);
+    setSelectedId(m.id);
+  };
+
   const removeMember = (id) => {
     setFamily(
-      family
-        .filter((m) => m.id !== id)
-        .map((m) => (m.parents?.includes(id) ? { ...m, parents: m.parents.filter((p) => p !== id) } : m))
+      family.filter((m) => m.id !== id).map((m) => ({
+        ...m,
+        parents: (m.parents || []).filter((p) => p !== id),
+        partners: (m.partners || []).filter((p) => p !== id),
+      }))
     );
     if (selectedId === id) setSelectedId(null);
   };
 
   // ---- Time With integration: carry a living relative into the people list ----
-  const trackInTimeWith = (m) => {
+  const peopleEntryFor = (m) => {
     const twKey = familyRole(m.role).timeWith || "other";
     const rel = RELATIONS.find((r) => r.key === twKey) || RELATIONS[6];
     const y = new Date().getFullYear();
     const theirAge = m.birthYear ? Math.max(0, y - m.birthYear) : Math.round(rel.defaultExp / 2);
     const exp = Math.max(theirAge + 1, memberLifeExp(m));
     const pid = Date.now();
-    setPeople([...people, { id: pid, name: m.name, relation: rel.key, theirAge,
-      theirLifeExp: exp, perYear: 6, familyId: m.id }]);
+    return { pid, entry: { id: pid, name: m.name, relation: rel.key, theirAge,
+      theirLifeExp: exp, perYear: 6, familyId: m.id } };
+  };
+  const trackInTimeWith = (m) => {
+    const { pid, entry } = peopleEntryFor(m);
+    setPeople([...people, entry]);
     updateMember(m.id, { linkedPersonId: pid });
   };
 
@@ -3798,10 +3833,7 @@ function FamilyView({ family, setFamily, people, setPeople, profile, goToPeople,
           initial={editing}
           family={family}
           profile={profile}
-          onSave={(m, alsoTrack) => {
-            if (editing) { updateMember(editing.id, m); setMode(null); }
-            else addMember(m, alsoTrack);
-          }}
+          onSave={(m, links, alsoTrack) => saveMember(m, links, !!editing, alsoTrack)}
           onCancel={family.length > 0 ? () => setMode(null) : null}
         />
       ) : selected ? (
@@ -3870,20 +3902,25 @@ function FamilyTree({ rows, family, selectedId, onSelect, big }) {
 
     const segs = [];
 
-    // marriage bars — a horizontal line joining the two parents of a child
+    // marriage bars — a horizontal line joining two partners
     const married = new Set();
+    const marry = (a, b) => {
+      if (!pos[a] || !pos[b]) return;
+      const lo = a < b ? a : b, hi = a < b ? b : a;
+      const key = "m" + lo + "-" + hi;
+      if (married.has(key)) return;
+      married.add(key);
+      const [L, R] = pos[a].cx <= pos[b].cx ? [pos[a], pos[b]] : [pos[b], pos[a]];
+      const y = (L.cy + R.cy) / 2;
+      segs.push({ key, x1: L.right, y1: y, x2: R.left, y2: y, marriage: true });
+    };
+    // explicit partners
+    family.forEach((m) => (m.partners || []).forEach((p) => marry(m.id, p)));
+    // co-parents of the same child
     family.forEach((c) => {
       const ps = (c.parents || []).filter((p) => pos[p]);
-      if (ps.length < 2) return;
       const sorted = [...ps].sort((a, b) => pos[a].cx - pos[b].cx);
-      for (let i = 0; i < sorted.length - 1; i++) {
-        const a = sorted[i], b = sorted[i + 1];
-        const key = "m" + a + "-" + b;
-        if (married.has(key)) continue;
-        married.add(key);
-        const y = (pos[a].cy + pos[b].cy) / 2;
-        segs.push({ key, x1: pos[a].right, y1: y, x2: pos[b].left, y2: y, marriage: true });
-      }
+      for (let i = 0; i < sorted.length - 1; i++) marry(sorted[i], sorted[i + 1]);
     });
 
     // descent — group children by their parent-set, then drop one straight
@@ -4011,6 +4048,8 @@ function MemberDetail({ member, family, people, onEdit, onRemove, onClose, onNot
   const passed = member.deathYear != null;
   const parents = (member.parents || [])
     .map((id) => family.find((m) => m.id === id)).filter(Boolean);
+  const partners = (member.partners || [])
+    .map((id) => family.find((m) => m.id === id)).filter(Boolean);
   const children = family.filter((m) => (m.parents || []).includes(member.id));
   const linked = member.linkedPersonId
     ? people.find((p) => p.id === member.linkedPersonId)
@@ -4035,6 +4074,12 @@ function MemberDetail({ member, family, people, onEdit, onRemove, onClose, onNot
 
       {/* lineage */}
       <div style={{ marginTop: 16, fontSize: 13.5, color: C.soil, lineHeight: 1.7 }}>
+        {partners.length > 0 && (
+          <div>
+            <span style={{ color: C.soilSoft }}>With: </span>
+            {partners.map((p) => p.name).join(" & ")}
+          </div>
+        )}
         <div>
           <span style={{ color: C.soilSoft }}>Descends from: </span>
           {parents.length ? parents.map((p) => p.name).join(" & ") : <em style={{ color: C.soilSoft }}>not recorded</em>}
@@ -4133,6 +4178,32 @@ function LifeInWeeksMini({ member }) {
   );
 }
 
+// A reusable row of selectable "chips" of family members.
+function MemberPicker({ label, hint, candidates, selected, onToggle, accent }) {
+  if (!candidates.length) return null;
+  const on = accent || C.clay;
+  return (
+    <div>
+      <Label>{label} {hint && <span style={{ fontWeight: 400 }}>{hint}</span>}</Label>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+        {candidates.map((m) => {
+          const isOn = selected.includes(m.id);
+          return (
+            <button key={m.id} onClick={() => onToggle(m.id)} className="kBtn"
+              style={{ padding: "8px 13px", borderRadius: 99, fontFamily: "inherit", fontSize: 12.5,
+                fontWeight: 600, cursor: "pointer",
+                border: `1px solid ${isOn ? on : C.line}`,
+                background: isOn ? on : "transparent",
+                color: isOn ? C.paper : C.soilSoft }}>
+              {familyRole(m.role).icon} {m.name}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function AddFamilyMember({ initial, family, profile, onSave, onCancel }) {
   const editing = !!initial;
   const hasSelf = family.some((m) => m.role === "self" && m.id !== initial?.id);
@@ -4141,7 +4212,12 @@ function AddFamilyMember({ initial, family, profile, onSave, onCancel }) {
   const [birthYear, setBirthYear] = useState(initial?.birthYear ? String(initial.birthYear) : "");
   const [alive, setAlive] = useState(initial ? initial.deathYear == null : true);
   const [deathYear, setDeathYear] = useState(initial?.deathYear ? String(initial.deathYear) : "");
+  // relationships: who this person descends from, who descends from them, and partners
   const [parents, setParents] = useState(initial?.parents || []);
+  const [childrenSel, setChildrenSel] = useState(
+    initial ? family.filter((m) => (m.parents || []).includes(initial.id)).map((m) => m.id) : []
+  );
+  const [partners, setPartners] = useState(initial?.partners || []);
   const [note, setNote] = useState(initial?.note || "");
   const [alsoTrack, setAlsoTrack] = useState(false);
 
@@ -4159,7 +4235,19 @@ function AddFamilyMember({ initial, family, profile, onSave, onCancel }) {
   const yNow = new Date().getFullYear();
   const roleOptions = FAMILY_ROLES.filter((r) => r.key !== "self" || !hasSelf || initial?.role === "self");
   const candidates = family.filter((m) => m.id !== initial?.id);
-  const toggleParent = (id) => setParents((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
+
+  // a person can't be both an ancestor and a descendant of the same relative
+  const toggleParent = (id) => setParents((p) => {
+    if (p.includes(id)) return p.filter((x) => x !== id);
+    setChildrenSel((c) => c.filter((x) => x !== id));
+    return [...p, id];
+  });
+  const toggleChild = (id) => setChildrenSel((c) => {
+    if (c.includes(id)) return c.filter((x) => x !== id);
+    setParents((p) => p.filter((x) => x !== id));
+    return [...c, id];
+  });
+  const togglePartner = (id) => setPartners((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
 
   const byInt = (v) => (v ? parseInt(v, 10) : null);
   const valid =
@@ -4170,17 +4258,20 @@ function AddFamilyMember({ initial, family, profile, onSave, onCancel }) {
   const submit = () => {
     if (!valid) return;
     const roleDef = familyRole(role);
-    const base = {
+    const id = initial?.id ?? Date.now();
+    const member = {
+      ...(initial || { linkedPersonId: null }),
+      id,
       name: name.trim(),
       role,
       birthYear: byInt(birthYear),
       deathYear: alive ? null : byInt(deathYear),
       lifeExp: role === "self" && profile?.lifeExp ? profile.lifeExp : roleDef.defaultExp,
       parents,
+      partners,
       note: note.trim(),
     };
-    if (editing) onSave({ ...initial, ...base });
-    else onSave({ id: Date.now(), linkedPersonId: null, ...base }, alsoTrack && alive);
+    onSave(member, { children: childrenSel, partners }, alsoTrack && alive);
   };
 
   return (
@@ -4245,21 +4336,32 @@ function AddFamilyMember({ initial, family, profile, onSave, onCancel }) {
           </div>
         )}
 
+        {/* relationships — this is how the tree knows who descends from whom */}
         {candidates.length > 0 && (
-          <div>
-            <Label>Whose child are they? <span style={{ fontWeight: 400 }}>(pick their parents)</span></Label>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-              {candidates.map((m) => (
-                <button key={m.id} onClick={() => toggleParent(m.id)} className="kBtn"
-                  style={{ padding: "8px 13px", borderRadius: 99, fontFamily: "inherit", fontSize: 12.5,
-                    fontWeight: 600, cursor: "pointer",
-                    border: `1px solid ${parents.includes(m.id) ? C.clay : C.line}`,
-                    background: parents.includes(m.id) ? C.clay : "transparent",
-                    color: parents.includes(m.id) ? C.paper : C.soilSoft }}>
-                  {familyRole(m.role).icon} {m.name}
-                </button>
-              ))}
-            </div>
+          <div style={{ display: "grid", gap: 14, padding: "14px 0", borderTop: `1px solid ${C.line}`,
+            borderBottom: `1px solid ${C.line}` }}>
+            <MemberPicker
+              label="Partner of"
+              hint="— sits beside them"
+              candidates={candidates}
+              selected={partners}
+              onToggle={togglePartner}
+              accent={C.rose}
+            />
+            <MemberPicker
+              label="Child of"
+              hint="— their parents (descends from)"
+              candidates={candidates}
+              selected={parents}
+              onToggle={toggleParent}
+            />
+            <MemberPicker
+              label="Parent of"
+              hint="— who descends from them"
+              candidates={candidates}
+              selected={childrenSel}
+              onToggle={toggleChild}
+            />
           </div>
         )}
 

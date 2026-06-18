@@ -103,24 +103,59 @@ export function familyRole(key) {
   return FAMILY_ROLES.find((r) => r.key === key) || FAMILY_ROLES[FAMILY_ROLES.length - 1];
 }
 
-// Generation level from parent links: roots (ancestors with no recorded parent
-// in the set) sit at 0, each descending generation one below. Cycle-safe.
+// Couples — two people are a "couple" (kept side by side, joined by a marriage
+// bar, sharing a generation) when they're explicitly partnered OR when they're
+// both parents of the same child. Returns a map: member id -> couple-group root.
+export function coupleRoots(members) {
+  const idSet = new Set(members.map((m) => m.id));
+  const uf = {};
+  members.forEach((m) => { uf[m.id] = m.id; });
+  const find = (x) => { while (uf[x] !== x) { uf[x] = uf[uf[x]]; x = uf[x]; } return x; };
+  const union = (a, b) => {
+    if (uf[a] == null || uf[b] == null) return;
+    const ra = find(a), rb = find(b);
+    if (ra !== rb) uf[ra] = rb;
+  };
+  // explicit partners
+  members.forEach((m) => (m.partners || []).forEach((p) => { if (idSet.has(p)) union(m.id, p); }));
+  // co-parents of the same child
+  members.forEach((c) => {
+    const ps = (c.parents || []).filter((p) => idSet.has(p));
+    for (let i = 1; i < ps.length; i++) union(ps[0], ps[i]);
+  });
+  const root = {};
+  members.forEach((m) => { root[m.id] = find(m.id); });
+  return root;
+}
+
+// Generation level from parent links, with couples pinned to the same level so
+// a married-in spouse (who has no recorded ancestry of their own) still sits
+// beside their partner. Roots sit at 0; each descending generation one below.
 export function computeGenerations(members) {
   const byId = Object.fromEntries(members.map((m) => [m.id, m]));
-  const memo = {};
+  const root = coupleRoots(members);
+  const groupMembers = {};
+  members.forEach((m) => { (groupMembers[root[m.id]] = groupMembers[root[m.id]] || []).push(m.id); });
+
+  const groupMemo = {};
   const visiting = new Set();
-  const level = (id) => {
-    if (memo[id] != null) return memo[id];
-    if (visiting.has(id)) return 0; // defensive: broken/circular link
-    visiting.add(id);
+  const baseLevel = (id) => {
     const m = byId[id];
     const ps = (m?.parents || []).filter((p) => byId[p]);
-    const v = ps.length ? Math.max(...ps.map(level)) + 1 : 0;
-    visiting.delete(id);
-    memo[id] = v;
-    return v;
+    return ps.length ? Math.max(...ps.map((p) => groupLevel(p))) + 1 : 0;
   };
-  members.forEach((m) => level(m.id));
+  const groupLevel = (id) => {
+    const r = root[id];
+    if (groupMemo[r] != null) return groupMemo[r];
+    if (visiting.has(r)) return 0; // defensive: broken/circular link
+    visiting.add(r);
+    const lv = Math.max(...groupMembers[r].map((mid) => baseLevel(mid)));
+    visiting.delete(r);
+    groupMemo[r] = lv;
+    return lv;
+  };
+  const memo = {};
+  members.forEach((m) => { memo[m.id] = groupLevel(m.id); });
   return memo;
 }
 
@@ -131,37 +166,23 @@ export function computeGenerations(members) {
 //         │
 //      Grandchild
 //
-// Two people who share a child are a "couple" and are kept adjacent. Each
-// generation is then ordered so couples/people sit under their own parents,
-// which keeps the descent lines straight and uncrossed.
+// Couples are kept adjacent; each generation is ordered so couples/people sit
+// under their own parents, which keeps the descent lines short and uncrossed.
 const minBirth = (group) => Math.min(...group.map((m) => m.birthYear || 9999));
 
 export function layoutGenerations(members) {
   const levels = computeGenerations(members);
+  const root = coupleRoots(members);
   const maxLevel = members.length ? Math.max(...members.map((m) => levels[m.id] ?? 0)) : -1;
   const orderIndex = {}; // member id -> horizontal slot within its own row
   const rows = [];
 
   for (let l = 0; l <= maxLevel; l++) {
     const rowMembers = members.filter((m) => (levels[m.id] ?? 0) === l);
-    const idSet = new Set(rowMembers.map((m) => m.id));
 
-    // union-find: join two people who are parents of the same child
-    const uf = {};
-    rowMembers.forEach((m) => { uf[m.id] = m.id; });
-    const find = (x) => { while (uf[x] !== x) { uf[x] = uf[uf[x]]; x = uf[x]; } return x; };
-    const union = (a, b) => { const ra = find(a), rb = find(b); if (ra !== rb) uf[ra] = rb; };
-    members.forEach((c) => {
-      const ps = (c.parents || []).filter((p) => idSet.has(p));
-      for (let i = 1; i < ps.length; i++) union(ps[0], ps[i]);
-    });
-
-    // collect couples/singles into units, spouses ordered by birth within a unit
+    // group this row's people into couple units
     const unitsById = {};
-    rowMembers.forEach((m) => {
-      const root = find(m.id);
-      (unitsById[root] = unitsById[root] || []).push(m);
-    });
+    rowMembers.forEach((m) => { (unitsById[root[m.id]] = unitsById[root[m.id]] || []).push(m); });
     const units = Object.values(unitsById);
     units.forEach((u) => u.sort((a, b) => (a.birthYear || 9999) - (b.birthYear || 9999)));
 
