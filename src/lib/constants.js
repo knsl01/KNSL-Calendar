@@ -124,31 +124,63 @@ export function computeGenerations(members) {
   return memo;
 }
 
-// Build the rows of the tree, ordered so children sit under their parents.
-// Generation 0 (the eldest) is ordered by birth; every generation below is
-// ordered by the average position of each member's parents in the row above,
-// which keeps the connecting lines short and stops them crossing the diagram.
+// Build the rows of the tree the way a genealogy chart reads:
+//   Father  Mother          (a couple, side by side)
+//      └──┬──┘
+//        Child              (their child, centred below)
+//         │
+//      Grandchild
+//
+// Two people who share a child are a "couple" and are kept adjacent. Each
+// generation is then ordered so couples/people sit under their own parents,
+// which keeps the descent lines straight and uncrossed.
+const minBirth = (group) => Math.min(...group.map((m) => m.birthYear || 9999));
+
 export function layoutGenerations(members) {
   const levels = computeGenerations(members);
   const maxLevel = members.length ? Math.max(...members.map((m) => levels[m.id] ?? 0)) : -1;
   const orderIndex = {}; // member id -> horizontal slot within its own row
   const rows = [];
+
   for (let l = 0; l <= maxLevel; l++) {
-    const row = members.filter((m) => (levels[m.id] ?? 0) === l);
-    if (l === 0) {
-      row.sort((a, b) => (a.birthYear || 9999) - (b.birthYear || 9999));
-    } else {
-      const key = (m) => {
-        const ps = (m.parents || []).filter((p) => orderIndex[p] != null);
-        if (!ps.length) return Number.POSITIVE_INFINITY; // unrooted → drift to the end
-        return ps.reduce((s, p) => s + orderIndex[p], 0) / ps.length;
-      };
-      row.sort((a, b) => {
-        const ka = key(a), kb = key(b);
-        if (ka !== kb) return ka - kb;
-        return (a.birthYear || 9999) - (b.birthYear || 9999);
-      });
-    }
+    const rowMembers = members.filter((m) => (levels[m.id] ?? 0) === l);
+    const idSet = new Set(rowMembers.map((m) => m.id));
+
+    // union-find: join two people who are parents of the same child
+    const uf = {};
+    rowMembers.forEach((m) => { uf[m.id] = m.id; });
+    const find = (x) => { while (uf[x] !== x) { uf[x] = uf[uf[x]]; x = uf[x]; } return x; };
+    const union = (a, b) => { const ra = find(a), rb = find(b); if (ra !== rb) uf[ra] = rb; };
+    members.forEach((c) => {
+      const ps = (c.parents || []).filter((p) => idSet.has(p));
+      for (let i = 1; i < ps.length; i++) union(ps[0], ps[i]);
+    });
+
+    // collect couples/singles into units, spouses ordered by birth within a unit
+    const unitsById = {};
+    rowMembers.forEach((m) => {
+      const root = find(m.id);
+      (unitsById[root] = unitsById[root] || []).push(m);
+    });
+    const units = Object.values(unitsById);
+    units.forEach((u) => u.sort((a, b) => (a.birthYear || 9999) - (b.birthYear || 9999)));
+
+    // order units under their parents (generation 0 just by age)
+    const unitKey = (u) => {
+      if (l === 0) return minBirth(u);
+      let sum = 0, cnt = 0;
+      u.forEach((m) => (m.parents || []).forEach((p) => {
+        if (orderIndex[p] != null) { sum += orderIndex[p]; cnt++; }
+      }));
+      return cnt ? sum / cnt : Number.POSITIVE_INFINITY;
+    };
+    units.sort((a, b) => {
+      const ka = unitKey(a), kb = unitKey(b);
+      if (ka !== kb) return ka - kb;
+      return minBirth(a) - minBirth(b);
+    });
+
+    const row = units.flat();
     row.forEach((m, i) => { orderIndex[m.id] = i; });
     rows.push(row);
   }

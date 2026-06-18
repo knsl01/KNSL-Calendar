@@ -3864,18 +3864,55 @@ function FamilyTree({ rows, family, selectedId, onSelect, big }) {
       const r = el.getBoundingClientRect();
       const left = r.left - cRect.left + wrap.scrollLeft;
       const top = r.top - cRect.top + wrap.scrollTop;
-      pos[m.id] = { cx: left + r.width / 2, top, bottom: top + r.height };
+      pos[m.id] = { left, right: left + r.width, cx: left + r.width / 2,
+        top, bottom: top + r.height, cy: top + r.height / 2 };
     });
-    const ls = [];
-    family.forEach((m) => {
-      (m.parents || []).forEach((pid) => {
-        if (pos[pid] && pos[m.id]) {
-          ls.push({ key: pid + "-" + m.id,
-            x1: pos[pid].cx, y1: pos[pid].bottom, x2: pos[m.id].cx, y2: pos[m.id].top });
-        }
-      });
+
+    const segs = [];
+
+    // marriage bars — a horizontal line joining the two parents of a child
+    const married = new Set();
+    family.forEach((c) => {
+      const ps = (c.parents || []).filter((p) => pos[p]);
+      if (ps.length < 2) return;
+      const sorted = [...ps].sort((a, b) => pos[a].cx - pos[b].cx);
+      for (let i = 0; i < sorted.length - 1; i++) {
+        const a = sorted[i], b = sorted[i + 1];
+        const key = "m" + a + "-" + b;
+        if (married.has(key)) continue;
+        married.add(key);
+        const y = (pos[a].cy + pos[b].cy) / 2;
+        segs.push({ key, x1: pos[a].right, y1: y, x2: pos[b].left, y2: y, marriage: true });
+      }
     });
-    setLines(ls);
+
+    // descent — group children by their parent-set, then drop one straight
+    // trunk down to a sibling bar and a short line into each child.
+    const groups = {};
+    family.forEach((c) => {
+      if (!pos[c.id]) return;
+      const ps = (c.parents || []).filter((p) => pos[p]);
+      if (!ps.length) return;
+      const k = [...ps].sort().join(",");
+      (groups[k] = groups[k] || { parents: ps, children: [] }).children.push(c.id);
+    });
+    Object.entries(groups).forEach(([k, g]) => {
+      const px = g.parents.reduce((s, p) => s + pos[p].cx, 0) / g.parents.length;
+      const py = Math.max(...g.parents.map((p) => pos[p].bottom));
+      const childXs = g.children.map((id) => pos[id].cx);
+      const busY = (py + Math.min(...g.children.map((id) => pos[id].top))) / 2;
+      // trunk down from the couple/parent to the sibling bar
+      segs.push({ key: k + "-trunk", x1: px, y1: py, x2: px, y2: busY });
+      // horizontal sibling bar spanning the children (and the trunk)
+      const minX = Math.min(px, ...childXs);
+      const maxX = Math.max(px, ...childXs);
+      if (maxX - minX > 0.5) segs.push({ key: k + "-bus", x1: minX, y1: busY, x2: maxX, y2: busY });
+      // short drop into each child
+      g.children.forEach((id) =>
+        segs.push({ key: k + "-c" + id, x1: pos[id].cx, y1: busY, x2: pos[id].cx, y2: pos[id].top }));
+    });
+
+    setLines(segs);
     setSize({ w: wrap.scrollWidth, h: wrap.scrollHeight });
   };
 
@@ -3893,11 +3930,11 @@ function FamilyTree({ rows, family, selectedId, onSelect, big }) {
       paddingBottom: 6, maxHeight: big ? "none" : 520 }}>
       <svg width={size.w} height={size.h}
         style={{ position: "absolute", top: 0, left: 0, pointerEvents: "none", overflow: "visible" }}>
-        {lines.map((l) => {
-          const midY = (l.y1 + l.y2) / 2;
-          const d = `M ${l.x1} ${l.y1} C ${l.x1} ${midY}, ${l.x2} ${midY}, ${l.x2} ${l.y2}`;
-          return <path key={l.key} d={d} fill="none" stroke={C.clay} strokeOpacity={0.5} strokeWidth={2} />;
-        })}
+        {lines.map((l) => (
+          <line key={l.key} x1={l.x1} y1={l.y1} x2={l.x2} y2={l.y2}
+            stroke={l.marriage ? C.rose : C.clay} strokeOpacity={l.marriage ? 0.55 : 0.5}
+            strokeWidth={2} strokeLinecap="round" />
+        ))}
       </svg>
       <div style={{ position: "relative", display: "flex", flexDirection: "column",
         gap: 52, minWidth: "min-content", padding: "4px 10px 0" }}>
