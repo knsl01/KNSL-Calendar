@@ -26,6 +26,8 @@ export const I18N = {
     "Family Tree": "Silsilah Keluarga",
     "View full tree": "Lihat silsilah", "Close": "Tutup",
     "Share": "Bagikan", "Preparing…": "Menyiapkan…", "Fit": "Pas",
+    "Image": "Gambar", "Fits the whole tree": "Memuat seluruh pohon",
+    "Story": "Story", "For Instagram / WhatsApp": "Untuk Instagram / WhatsApp",
     "Today": "Hari ini", "Add countdown": "Tambah hitung mundur",
     "What are you counting down to?": "Apa yang kamu nanti-nantikan?",
     "Title": "Judul", "Date": "Tanggal", "Time": "Waktu", "optional": "opsional",
