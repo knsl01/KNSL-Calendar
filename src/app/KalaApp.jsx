@@ -6,7 +6,7 @@ import { sendMagicLink, verifyEmailCode, getUser, onAuthChange, signOut } from "
 import { WEEKS_PER_YEAR, weeksBetween, fmt, currentWeekKey } from "@/lib/helpers";
 import {
   AREAS, LIFE_SEASONS, RELATIONS,
-  FAMILY_ROLES, familyRole, computeGenerations,
+  FAMILY_ROLES, familyRole, computeGenerations, layoutGenerations,
   WEEKLY_PROMPTS, weekPromptIndex,
   WRAPPED_THEMES, WRAPPED_HEADLINES, WRAPPED_CAPTIONS, WRAPPED_QUOTES,
   TAB_META, CUSTOMIZABLE_TABS, DEFAULT_NAV, sanitizeNav,
@@ -3703,8 +3703,9 @@ function yearsText(m) {
 function FamilyView({ family, setFamily, people, setPeople, profile, goToPeople, lang }) {
   const [selectedId, setSelectedId] = useState(null);
   const [mode, setMode] = useState(family.length === 0 ? "add" : null); // null | "add" | "edit"
+  const [fullscreen, setFullscreen] = useState(false);
 
-  const levels = useMemo(() => computeGenerations(family), [family]);
+  const { rows, levels } = useMemo(() => layoutGenerations(family), [family]);
   const generations = family.length ? Math.max(...family.map((m) => levels[m.id] ?? 0)) + 1 : 0;
   const living = family.filter((m) => m.deathYear == null).length;
   const passed = family.length - living;
@@ -3769,9 +3770,26 @@ function FamilyView({ family, setFamily, people, setPeople, profile, goToPeople,
       {/* the tree */}
       {family.length > 0 && (
         <div className="kCard" style={cardStyle({ marginTop: 16, padding: "20px 16px" })}>
-          <FamilyTree family={family} levels={levels} selectedId={selectedId}
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center",
+            marginBottom: 12, gap: 12, flexWrap: "wrap" }}>
+            <Eyebrow>{tr("Family Tree", lang)}</Eyebrow>
+            <button onClick={() => setFullscreen(true)} className="kBtn"
+              style={{ background: "transparent", border: `1px solid ${C.line}`, borderRadius: 99,
+                padding: "8px 15px", cursor: "pointer", fontFamily: "inherit", fontSize: 12.5,
+                fontWeight: 600, color: C.clay, display: "flex", alignItems: "center", gap: 7 }}>
+              ⛶ {tr("View full tree", lang)}
+            </button>
+          </div>
+          <FamilyTree rows={rows} family={family} selectedId={selectedId}
             onSelect={(id) => { setSelectedId(id); setMode(null); }} />
         </div>
+      )}
+
+      {/* fullscreen silsilah */}
+      {fullscreen && (
+        <FamilyTreeModal rows={rows} family={family} selectedId={selectedId} lang={lang}
+          onSelect={(id) => { setSelectedId(id); setMode(null); setFullscreen(false); }}
+          onClose={() => setFullscreen(false)} />
       )}
 
       {/* add / edit form */}
@@ -3829,21 +3847,11 @@ function FamilyView({ family, setFamily, people, setPeople, profile, goToPeople,
 // The diagram: generations stacked top→bottom, with SVG curves drawn from each
 // parent down to each child. Positions are measured from the DOM so the lines
 // stay correct as the layout reflows or the user scrolls a wide tree.
-function FamilyTree({ family, levels, selectedId, onSelect }) {
+function FamilyTree({ rows, family, selectedId, onSelect, big }) {
   const wrapRef = useRef(null);
   const nodeRefs = useRef({});
   const [lines, setLines] = useState([]);
   const [size, setSize] = useState({ w: 0, h: 0 });
-
-  const maxLevel = family.length ? Math.max(...family.map((m) => levels[m.id] ?? 0)) : 0;
-  const rows = [];
-  for (let l = 0; l <= maxLevel; l++) {
-    rows.push(
-      family
-        .filter((m) => (levels[m.id] ?? 0) === l)
-        .sort((a, b) => (a.birthYear || 9999) - (b.birthYear || 9999))
-    );
-  }
 
   const measure = () => {
     const wrap = wrapRef.current;
@@ -3878,22 +3886,23 @@ function FamilyTree({ family, levels, selectedId, onSelect }) {
     window.addEventListener("resize", measure);
     return () => { ro.disconnect(); window.removeEventListener("resize", measure); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [family, selectedId]);
+  }, [rows, selectedId]);
 
   return (
-    <div ref={wrapRef} style={{ position: "relative", overflowX: "auto", paddingBottom: 6 }}>
+    <div ref={wrapRef} style={{ position: "relative", overflow: "auto",
+      paddingBottom: 6, maxHeight: big ? "none" : 520 }}>
       <svg width={size.w} height={size.h}
         style={{ position: "absolute", top: 0, left: 0, pointerEvents: "none", overflow: "visible" }}>
         {lines.map((l) => {
           const midY = (l.y1 + l.y2) / 2;
           const d = `M ${l.x1} ${l.y1} C ${l.x1} ${midY}, ${l.x2} ${midY}, ${l.x2} ${l.y2}`;
-          return <path key={l.key} d={d} fill="none" stroke={C.line} strokeWidth={2} />;
+          return <path key={l.key} d={d} fill="none" stroke={C.clay} strokeOpacity={0.5} strokeWidth={2} />;
         })}
       </svg>
       <div style={{ position: "relative", display: "flex", flexDirection: "column",
-        gap: 38, minWidth: "min-content", padding: "4px 6px 0" }}>
+        gap: 52, minWidth: "min-content", padding: "4px 10px 0" }}>
         {rows.map((row, i) => (
-          <div key={i} style={{ display: "flex", gap: 16, justifyContent: "center", minWidth: "min-content" }}>
+          <div key={i} style={{ display: "flex", gap: 18, justifyContent: "center", minWidth: "min-content" }}>
             {row.map((m) => (
               <div key={m.id} ref={(el) => (nodeRefs.current[m.id] = el)}>
                 <FamilyNode member={m} selected={selectedId === m.id} onSelect={() => onSelect(m.id)} />
@@ -3901,6 +3910,33 @@ function FamilyTree({ family, levels, selectedId, onSelect }) {
             ))}
           </div>
         ))}
+      </div>
+    </div>
+  );
+}
+
+// Fullscreen silsilah — a focused, scrollable view of the whole tree.
+function FamilyTreeModal({ rows, family, selectedId, onSelect, onClose, lang }) {
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 60,
+      background: "rgba(20,14,9,.55)", backdropFilter: "blur(3px)",
+      display: "flex", flexDirection: "column", padding: "0" }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: C.bg, flex: 1,
+        display: "flex", flexDirection: "column", overflow: "hidden" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center",
+          padding: "16px 20px", borderBottom: `1px solid ${C.line}` }}>
+          <div style={{ fontFamily: "'Fraunces',serif", fontWeight: 600, fontSize: 18, color: C.soil }}>
+            {tr("Family Tree", lang)}
+          </div>
+          <button onClick={onClose} className="kBtn" style={{ background: "transparent",
+            border: `1px solid ${C.line}`, borderRadius: 99, padding: "7px 16px", cursor: "pointer",
+            fontFamily: "inherit", fontSize: 13, fontWeight: 600, color: C.soil }}>
+            {tr("Close", lang)} ×
+          </button>
+        </div>
+        <div style={{ flex: 1, overflow: "auto", padding: "24px 16px" }}>
+          <FamilyTree rows={rows} family={family} selectedId={selectedId} onSelect={onSelect} big />
+        </div>
       </div>
     </div>
   );

@@ -24,6 +24,7 @@ export const I18N = {
     "Memory Timeline": "Linimasa Memori", "Diary": "Diary", "Wrapped": "Wrapped",
     "Calendar": "Kalender", "Countdown": "Hitung Mundur", "Time With": "Waktu Bersama",
     "Family Tree": "Silsilah Keluarga",
+    "View full tree": "Lihat silsilah", "Close": "Tutup",
     "Today": "Hari ini", "Add countdown": "Tambah hitung mundur",
     "What are you counting down to?": "Apa yang kamu nanti-nantikan?",
     "Title": "Judul", "Date": "Tanggal", "Time": "Waktu", "optional": "opsional",
