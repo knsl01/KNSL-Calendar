@@ -3705,19 +3705,22 @@ function FamilyView({ family, setFamily, people, setPeople, profile, goToPeople,
   const [mode, setMode] = useState(family.length === 0 ? "add" : null); // null | "add" | "edit"
   const [fullscreen, setFullscreen] = useState(false);
   const [sharing, setSharing] = useState(false);
+  const [shareOpen, setShareOpen] = useState(false);
 
-  const shareTree = async () => {
+  const shareTree = async (format) => {
+    setShareOpen(false);
     setSharing(true);
     try {
-      const blob = await renderFamilyTreeImage(family, profile, C);
-      const file = new File([blob], "kala-family-tree.png", { type: "image/png" });
+      const blob = await renderFamilyTreeImage(family, profile, C, { format });
+      const file = new File([blob], `kala-family-tree${format === "story" ? "-story" : ""}.png`,
+        { type: "image/png" });
       if (navigator.canShare && navigator.canShare({ files: [file] })) {
         await navigator.share({ files: [file], title: "My family tree",
           text: "Our lineage — mapped with KALA." });
       } else {
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
-        a.href = url; a.download = "kala-family-tree.png";
+        a.href = url; a.download = file.name;
         document.body.appendChild(a); a.click(); document.body.removeChild(a);
         setTimeout(() => URL.revokeObjectURL(url), 2000);
       }
@@ -3840,13 +3843,39 @@ function FamilyView({ family, setFamily, people, setPeople, profile, goToPeople,
                   fontWeight: 600, color: C.clay, display: "flex", alignItems: "center", gap: 7 }}>
                 ⛶ {tr("View full tree", lang)}
               </button>
-              <button onClick={shareTree} disabled={sharing} className="kBtn"
-                style={{ background: C.clay, border: "none", borderRadius: 99,
-                  padding: "8px 15px", cursor: sharing ? "default" : "pointer", fontFamily: "inherit",
-                  fontSize: 12.5, fontWeight: 600, color: C.paper, opacity: sharing ? 0.6 : 1,
-                  display: "flex", alignItems: "center", gap: 7 }}>
-                ↗ {sharing ? tr("Preparing…", lang) : tr("Share", lang)}
-              </button>
+              <div style={{ position: "relative" }}>
+                <button onClick={() => setShareOpen((o) => !o)} disabled={sharing} className="kBtn"
+                  style={{ background: C.clay, border: "none", borderRadius: 99,
+                    padding: "8px 15px", cursor: sharing ? "default" : "pointer", fontFamily: "inherit",
+                    fontSize: 12.5, fontWeight: 600, color: C.paper, opacity: sharing ? 0.6 : 1,
+                    display: "flex", alignItems: "center", gap: 7 }}>
+                  ↗ {sharing ? tr("Preparing…", lang) : tr("Share", lang)}
+                </button>
+                {shareOpen && !sharing && (
+                  <div style={{ position: "absolute", top: "calc(100% + 6px)", right: 0, zIndex: 5,
+                    background: C.paper, border: `1px solid ${C.line}`, borderRadius: 14,
+                    boxShadow: "0 16px 40px -22px rgba(46,32,24,.6)", padding: 6, minWidth: 184 }}>
+                    <button onClick={() => shareTree("natural")} className="kBtn"
+                      style={{ display: "block", width: "100%", textAlign: "left", background: "transparent",
+                        border: "none", borderRadius: 9, padding: "10px 12px", cursor: "pointer",
+                        fontFamily: "inherit", fontSize: 13, fontWeight: 600, color: C.soil }}>
+                      🖼 {tr("Image", lang)}
+                      <span style={{ display: "block", fontSize: 11, fontWeight: 400, color: C.soilSoft }}>
+                        {tr("Fits the whole tree", lang)}
+                      </span>
+                    </button>
+                    <button onClick={() => shareTree("story")} className="kBtn"
+                      style={{ display: "block", width: "100%", textAlign: "left", background: "transparent",
+                        border: "none", borderRadius: 9, padding: "10px 12px", cursor: "pointer",
+                        fontFamily: "inherit", fontSize: 13, fontWeight: 600, color: C.soil }}>
+                      📱 {tr("Story", lang)} · 9:16
+                      <span style={{ display: "block", fontSize: 11, fontWeight: 400, color: C.soilSoft }}>
+                        {tr("For Instagram / WhatsApp", lang)}
+                      </span>
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
           <FamilyTree family={family} selectedId={selectedId}
@@ -4457,141 +4486,173 @@ function roundRectPath(ctx, x, y, w, h, r) {
   ctx.closePath();
 }
 
-// Render the whole family tree to a shareable PNG, themed to the current
-// palette — a soft gradient, generation bands, shadowed cards and a footer,
-// so it looks like a keepsake rather than a screenshot.
-function renderFamilyTreeImage(family, profile, palette) {
+// hex → rgba with alpha (for soft tints on the shared image)
+function hexA(c, a) {
+  const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(c);
+  return m ? `rgba(${parseInt(m[1], 16)},${parseInt(m[2], 16)},${parseInt(m[3], 16)},${a})` : c;
+}
+
+// Paint the tree itself (generation bands, curves, marriage bars, cards) at a
+// given offset and scale — shared by both the natural and Story exports.
+function paintTree(x, family, P, layout, Cx, ox, oy, scale) {
+  const { width: treeW, nodeW, nodeH, levels } = layout;
+  const clip = (s, n) => (s.length > n ? s.slice(0, n - 1) + "…" : s);
+  const SX = (vx) => ox + vx * scale;
+  const SY = (vy) => oy + vy * scale;
+
+  // generation bands
+  const rowY = {};
+  family.forEach((m) => { if (P[m.id]) rowY[levels[m.id] ?? 0] = P[m.id].y; });
+  Object.entries(rowY).forEach(([lv, y]) => {
+    x.fillStyle = hexA(+lv % 2 ? Cx.sage : Cx.clay, 0.05);
+    roundRectPath(x, SX(-8), SY(y - 14), treeW * scale + 16, (nodeH + 28) * scale, 16 * scale);
+    x.fill();
+  });
+
+  // descent curves
+  x.strokeStyle = Cx.clay; x.lineWidth = 2.4 * scale; x.globalAlpha = 0.55;
+  family.forEach((c) => {
+    if (!P[c.id]) return;
+    const ps = (c.parents || []).filter((p) => P[p]);
+    if (!ps.length) return;
+    const ax = SX(ps.reduce((s2, p) => s2 + P[p].x, 0) / ps.length);
+    const ay = SY(Math.max(...ps.map((p) => P[p].y)) + nodeH);
+    const cx = SX(P[c.id].x), cy = SY(P[c.id].y);
+    const midY = (ay + cy) / 2;
+    x.beginPath(); x.moveTo(ax, ay); x.bezierCurveTo(ax, midY, cx, midY, cx, cy); x.stroke();
+  });
+
+  // marriage bars
+  x.strokeStyle = Cx.rose; x.globalAlpha = 0.7; x.lineWidth = 2.4 * scale;
+  const drawn = new Set();
+  const marry = (a, b) => {
+    if (!P[a] || !P[b]) return;
+    const k = a < b ? a + "-" + b : b + "-" + a;
+    if (drawn.has(k)) return; drawn.add(k);
+    const [L, R] = P[a].x <= P[b].x ? [P[a], P[b]] : [P[b], P[a]];
+    const yy = SY((L.y + R.y) / 2 + nodeH / 2);
+    x.beginPath(); x.moveTo(SX(L.x + nodeW / 2), yy); x.lineTo(SX(R.x - nodeW / 2), yy); x.stroke();
+  };
+  family.forEach((m) => (m.partners || []).forEach((p) => marry(m.id, p)));
+  family.forEach((c) => {
+    const ps = (c.parents || []).filter((p) => P[p]);
+    for (let i = 0; i < ps.length; i++) for (let j = i + 1; j < ps.length; j++) marry(ps[i], ps[j]);
+  });
+  x.globalAlpha = 1;
+
+  // node cards
+  family.forEach((m) => {
+    const p = P[m.id]; if (!p) return;
+    const nx = SX(p.x - nodeW / 2), ny = SY(p.y), nw = nodeW * scale, nh = nodeH * scale;
+    const role = familyRole(m.role); const passed = m.deathYear != null;
+    const accent = m.role === "self" ? Cx.clay : m.role === "partner" ? Cx.rose
+      : passed ? Cx.soilSoft : Cx.sage;
+    x.globalAlpha = passed ? 0.92 : 1;
+    roundRectPath(x, nx, ny, nw, nh, 14 * scale);
+    x.shadowColor = "rgba(46,32,24,0.20)"; x.shadowBlur = 18 * scale; x.shadowOffsetY = 8 * scale;
+    x.fillStyle = Cx.paper; x.fill();
+    x.shadowColor = "transparent"; x.shadowBlur = 0; x.shadowOffsetY = 0;
+    x.fillStyle = hexA(accent, 0.9);
+    roundRectPath(x, nx, ny, nw, 5 * scale, 3 * scale); x.fill();
+    x.strokeStyle = Cx.line; x.lineWidth = 1.25 * scale;
+    roundRectPath(x, nx, ny, nw, nh, 14 * scale); x.stroke();
+    const cx = nx + nw / 2;
+    x.textAlign = "center";
+    x.fillStyle = accent; x.font = `${19 * scale}px 'Jakarta', sans-serif`;
+    x.fillText(role.icon, cx, ny + 32 * scale);
+    x.fillStyle = Cx.soil; x.font = `600 ${16 * scale}px 'Fraunces', serif`;
+    x.fillText(clip(m.name, 15), cx, ny + 56 * scale);
+    x.fillStyle = Cx.soilSoft; x.font = `400 ${11 * scale}px 'Jakarta', sans-serif`;
+    x.fillText(m.role === "self" ? "You" : role.label, cx, ny + 74 * scale);
+    x.fillText(yearsText(m), cx, ny + 90 * scale);
+    x.globalAlpha = 1;
+  });
+}
+
+// Render the family tree to a shareable PNG. format "natural" sizes the canvas
+// to the tree; format "story" produces a 1080×1920 portrait card for IG/WA.
+function renderFamilyTreeImage(family, profile, palette, opts = {}) {
+  const story = opts.format === "story";
   return new Promise((resolve, reject) => {
     const Cx = palette;
-    const { positions: P, width: w, height: h, nodeW, nodeH, levels } = computeTreeLayout(family);
-    const SCALE = 2, TOP = 184, BOTTOM = 120, SIDE = 40;
-    const W = Math.max(820, w + SIDE * 2);
-    const ox = (W - w) / 2, oy = TOP;
-    const H = h + TOP + BOTTOM;
+    const layout = computeTreeLayout(family);
+    const { width: treeW, height: treeH, levels } = layout;
     const generations = family.length ? Math.max(...family.map((m) => levels[m.id] ?? 0)) + 1 : 0;
+    const subtitle = `${family.length} people · ${generations} generations · every life in weeks`;
+    const lineageTitle = profile?.name ? `${profile.name}’s lineage` : "Our lineage";
+
+    let W, H, SCALE, ox, oy, scale, headTitleY, headSubY, eyebrowY, footY;
+    if (story) {
+      W = 1080; H = 1920; SCALE = 1;
+      const cTop = 360, cBottom = H - 200, cLeft = 70, cRight = W - 70;
+      const availW = cRight - cLeft, availH = cBottom - cTop;
+      scale = Math.min(availW / treeW, availH / treeH, 1.5);
+      ox = cLeft + (availW - treeW * scale) / 2;
+      oy = cTop + (availH - treeH * scale) / 2;
+      eyebrowY = 150; headTitleY = 230; headSubY = 280; footY = H - 110;
+    } else {
+      SCALE = 2;
+      const SIDE = 40, TOP = 184, BOTTOM = 120;
+      W = Math.max(820, treeW + SIDE * 2); H = treeH + TOP + BOTTOM;
+      ox = (W - treeW) / 2; oy = TOP; scale = 1;
+      eyebrowY = 58; headTitleY = 122; headSubY = 150; footY = H - 36;
+    }
+
     const cv = document.createElement("canvas");
     cv.width = W * SCALE; cv.height = H * SCALE;
     const x = cv.getContext("2d");
     x.scale(SCALE, SCALE);
-    const clip = (s, n) => (s.length > n ? s.slice(0, n - 1) + "…" : s);
-    const hex = (c, a) => {
-      const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(c);
-      return m ? `rgba(${parseInt(m[1],16)},${parseInt(m[2],16)},${parseInt(m[3],16)},${a})` : c;
-    };
+    const SIDE = story ? 70 : 40;
 
     const draw = () => {
-      // background gradient
+      // background
       const g = x.createLinearGradient(0, 0, 0, H);
       g.addColorStop(0, Cx.bg); g.addColorStop(1, Cx.card || Cx.bg);
       x.fillStyle = g; x.fillRect(0, 0, W, H);
-      // faint "weeks" dot grid, top-right
-      for (let r = 0; r < 6; r++) for (let c = 0; c < 9; c++) {
-        x.fillStyle = hex((r + c) % 4 === 0 ? Cx.clay : Cx.soilSoft, 0.10);
-        x.fillRect(W - 9 * 22 - 24 + c * 22, 34 + r * 22, 12, 12);
+      // faint weeks-dot motif (top-right)
+      const dpx = story ? 30 : 22, dn = story ? 12 : 9, dr = story ? 7 : 6;
+      for (let r = 0; r < (story ? 8 : 6); r++) for (let c = 0; c < dn; c++) {
+        x.fillStyle = hexA((r + c) % 4 === 0 ? Cx.clay : Cx.soilSoft, 0.10);
+        x.fillRect(W - dn * dpx - SIDE + c * dpx, (story ? 60 : 34) + r * dpx, dr * 2, dr * 2);
       }
-
-      // generation bands (faint, alternating) for structure
-      const rowY = {};
-      family.forEach((m) => { if (P[m.id]) rowY[levels[m.id] ?? 0] = P[m.id].y + oy; });
-      Object.entries(rowY).forEach(([lv, y]) => {
-        x.fillStyle = hex(+lv % 2 ? Cx.sage : Cx.clay, 0.05);
-        roundRectPath(x, SIDE - 8, y - 14, W - (SIDE - 8) * 2, nodeH + 28, 16);
-        x.fill();
-      });
 
       // header
       x.textAlign = "left";
-      // small glyph
-      const gx = SIDE, gy = 40, s = 7;
+      const gx = SIDE, gy = story ? 70 : 40, gs = story ? 9 : 7, gap = story ? 4 : 3;
       [0,0,0,0,1,2,2,2,2].forEach((v, i) => {
-        x.fillStyle = v === 0 ? Cx.past : v === 1 ? Cx.clay : hex(Cx.soilSoft, 0.35);
-        x.fillRect(gx + (i % 3) * (s + 3), gy + Math.floor(i / 3) * (s + 3), s, s);
+        x.fillStyle = v === 0 ? Cx.past : v === 1 ? Cx.clay : hexA(Cx.soilSoft, 0.35);
+        x.fillRect(gx + (i % 3) * (gs + gap), gy + Math.floor(i / 3) * (gs + gap), gs, gs);
       });
-      x.fillStyle = Cx.clay; x.font = "600 14px 'Jakarta', sans-serif";
-      x.fillText("KALA · FAMILY TREE", gx + 42, gy + 18);
-      x.fillStyle = Cx.soil; x.font = "500 38px 'Fraunces', serif";
-      x.fillText(profile?.name ? `${profile.name}’s lineage` : "Our lineage", SIDE, 122);
-      x.fillStyle = Cx.soilSoft; x.font = "400 15px 'Jakarta', sans-serif";
-      x.fillText(`${family.length} people · ${generations} generations · every life in weeks`, SIDE, 150);
+      x.fillStyle = Cx.clay; x.font = `600 ${story ? 20 : 14}px 'Jakarta', sans-serif`;
+      x.fillText("KALA · FAMILY TREE", gx + (story ? 54 : 42), gy + (story ? 26 : 18));
+      x.fillStyle = Cx.soil; x.font = `500 ${story ? 58 : 38}px 'Fraunces', serif`;
+      x.fillText(lineageTitle, SIDE, headTitleY);
+      x.fillStyle = Cx.soilSoft; x.font = `400 ${story ? 24 : 15}px 'Jakarta', sans-serif`;
+      x.fillText(subtitle, SIDE, headSubY);
 
-      // descent curves
-      x.strokeStyle = Cx.clay; x.lineWidth = 2.4; x.globalAlpha = 0.55;
-      family.forEach((c) => {
-        if (!P[c.id]) return;
-        const ps = (c.parents || []).filter((p) => P[p]);
-        if (!ps.length) return;
-        const ax = ps.reduce((s2, p) => s2 + P[p].x, 0) / ps.length + ox;
-        const ay = Math.max(...ps.map((p) => P[p].y)) + nodeH + oy;
-        const cx = P[c.id].x + ox, cy = P[c.id].y + oy;
-        const midY = (ay + cy) / 2;
-        x.beginPath(); x.moveTo(ax, ay); x.bezierCurveTo(ax, midY, cx, midY, cx, cy); x.stroke();
-      });
-
-      // marriage bars
-      x.strokeStyle = Cx.rose; x.globalAlpha = 0.7; x.lineWidth = 2.4;
-      const drawn = new Set();
-      const marry = (a, b) => {
-        if (!P[a] || !P[b]) return;
-        const k = a < b ? a + "-" + b : b + "-" + a;
-        if (drawn.has(k)) return; drawn.add(k);
-        const [L, R] = P[a].x <= P[b].x ? [P[a], P[b]] : [P[b], P[a]];
-        const yy = (L.y + R.y) / 2 + nodeH / 2 + oy;
-        x.beginPath(); x.moveTo(L.x + nodeW / 2 + ox, yy); x.lineTo(R.x - nodeW / 2 + ox, yy); x.stroke();
-      };
-      family.forEach((m) => (m.partners || []).forEach((p) => marry(m.id, p)));
-      family.forEach((c) => {
-        const ps = (c.parents || []).filter((p) => P[p]);
-        for (let i = 0; i < ps.length; i++) for (let j = i + 1; j < ps.length; j++) marry(ps[i], ps[j]);
-      });
-      x.globalAlpha = 1;
-
-      // node cards (with a soft shadow)
-      family.forEach((m) => {
-        const p = P[m.id]; if (!p) return;
-        const nx = p.x - nodeW / 2 + ox, ny = p.y + oy;
-        const role = familyRole(m.role); const passed = m.deathYear != null;
-        const accent = m.role === "self" ? Cx.clay : m.role === "partner" ? Cx.rose
-          : passed ? Cx.soilSoft : Cx.sage;
-        x.globalAlpha = passed ? 0.92 : 1;
-        roundRectPath(x, nx, ny, nodeW, nodeH, 14);
-        x.shadowColor = "rgba(46,32,24,0.20)"; x.shadowBlur = 18; x.shadowOffsetY = 8;
-        x.fillStyle = Cx.paper; x.fill();
-        x.shadowColor = "transparent"; x.shadowBlur = 0; x.shadowOffsetY = 0;
-        // accent top edge
-        x.fillStyle = hex(accent, 0.9);
-        roundRectPath(x, nx, ny, nodeW, 5, 3); x.fill();
-        x.strokeStyle = Cx.line; x.lineWidth = 1.25; roundRectPath(x, nx, ny, nodeW, nodeH, 14); x.stroke();
-        const cx = nx + nodeW / 2;
-        x.textAlign = "center";
-        x.fillStyle = accent; x.font = "19px 'Jakarta', sans-serif";
-        x.fillText(role.icon, cx, ny + 32);
-        x.fillStyle = Cx.soil; x.font = "600 16px 'Fraunces', serif";
-        x.fillText(clip(m.name, 15), cx, ny + 56);
-        x.fillStyle = Cx.soilSoft; x.font = "400 11px 'Jakarta', sans-serif";
-        x.fillText(m.role === "self" ? "You" : role.label, cx, ny + 74);
-        x.fillText(yearsText(m), cx, ny + 90);
-        x.globalAlpha = 1;
-      });
+      // the tree
+      paintTree(x, family, P_, layout, Cx, ox, oy, scale);
 
       // footer
       x.textAlign = "left";
-      x.strokeStyle = hex(Cx.soilSoft, 0.35); x.lineWidth = 1;
-      x.beginPath(); x.moveTo(SIDE, H - 64); x.lineTo(W - SIDE, H - 64); x.stroke();
-      x.fillStyle = Cx.soil; x.font = "italic 500 17px 'Fraunces', serif";
-      x.fillText("Every life here came from another.", SIDE, H - 36);
+      x.strokeStyle = hexA(Cx.soilSoft, 0.35); x.lineWidth = 1;
+      x.beginPath(); x.moveTo(SIDE, footY - 28); x.lineTo(W - SIDE, footY - 28); x.stroke();
+      x.fillStyle = Cx.soil; x.font = `italic 500 ${story ? 24 : 17}px 'Fraunces', serif`;
+      x.fillText("Every life here came from another.", SIDE, footY);
       x.textAlign = "right";
-      x.fillStyle = Cx.soilSoft; x.font = "600 13px 'Jakarta', sans-serif";
-      x.fillText("kala.knsl.tech · A product by KNSL", W - SIDE, H - 36);
+      x.fillStyle = Cx.soilSoft; x.font = `600 ${story ? 18 : 13}px 'Jakarta', sans-serif`;
+      x.fillText("kala.knsl.tech · A product by KNSL", W - SIDE, footY);
 
       cv.toBlob((b) => (b ? resolve(b) : reject(new Error("toBlob failed"))), "image/png");
     };
 
+    const P_ = layout.positions;
     if (document.fonts && document.fonts.ready) {
       Promise.all([
-        document.fonts.load("500 38px 'Fraunces'"),
-        document.fonts.load("600 16px 'Fraunces'"),
-        document.fonts.load("italic 500 17px 'Fraunces'"),
-        document.fonts.load("400 13px 'Jakarta'"),
+        document.fonts.load(`500 ${story ? 58 : 38}px 'Fraunces'`),
+        document.fonts.load(`600 16px 'Fraunces'`),
+        document.fonts.load(`italic 500 ${story ? 24 : 17}px 'Fraunces'`),
+        document.fonts.load(`400 13px 'Jakarta'`),
       ]).then(draw).catch(draw);
     } else draw();
   });
