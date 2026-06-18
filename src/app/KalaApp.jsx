@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from "react";
+import React, { useState, useEffect, useRef, useMemo, useLayoutEffect } from "react";
 import { THEME_DEFS, buildPalette } from "@/lib/themes";
 import { loadState, saveState, clearState, migrateLocalToCloud } from "@/lib/storage";
 import { cloudEnabled } from "@/lib/supabase";
@@ -6,6 +6,7 @@ import { sendMagicLink, verifyEmailCode, getUser, onAuthChange, signOut } from "
 import { WEEKS_PER_YEAR, weeksBetween, fmt, currentWeekKey } from "@/lib/helpers";
 import {
   AREAS, LIFE_SEASONS, RELATIONS,
+  FAMILY_ROLES, familyRole, computeGenerations,
   WEEKLY_PROMPTS, weekPromptIndex,
   WRAPPED_THEMES, WRAPPED_HEADLINES, WRAPPED_CAPTIONS, WRAPPED_QUOTES,
   TAB_META, CUSTOMIZABLE_TABS, DEFAULT_NAV, sanitizeNav,
@@ -270,6 +271,8 @@ export default function KalaApp() {
   const [weekly, setWeekly] = useState({});
   const [lastSeenWeek, setLastSeenWeek] = useState(null);
   const [people, setPeople] = useState([]); // [{id,name,relation,theirAge,theirLifeExp,perYear}]
+  // family tree — [{id,name,role,birthYear,deathYear|null,lifeExp,parents:[id],note,linkedPersonId|null}]
+  const [family, setFamily] = useState([]);
   const [countdowns, setCountdowns] = useState([]); // [{id,title,date}]
   // Future Me — sealed letters to the future self. Each:
   // {id,title,message,photo,targets[],createdAt,openDate,opened,openedAt,reflection,nowNote,targetStatus{}}
@@ -298,6 +301,7 @@ export default function KalaApp() {
         setDiary(saved.diary || []);
         setWeekly(saved.weekly || {});
         setPeople(saved.people || []);
+        setFamily(saved.family || []);
         setCountdowns(saved.countdowns || []);
         setLetters(saved.letters || []);
         setNavTabsRaw(sanitizeNav(saved.navTabs));
@@ -339,17 +343,17 @@ export default function KalaApp() {
     if (stage !== "app") return;
     clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => {
-      saveState({ profile, plans, activePlan, memories, diary, weekly, lastSeenWeek, people, countdowns, letters, navTabs, theme, dark, lang, account });
+      saveState({ profile, plans, activePlan, memories, diary, weekly, lastSeenWeek, people, family, countdowns, letters, navTabs, theme, dark, lang, account });
     }, 600);
     return () => clearTimeout(saveTimer.current);
-  }, [stage, profile, plans, activePlan, memories, diary, weekly, lastSeenWeek, people, countdowns, letters, navTabs, theme, dark, lang, account]);
+  }, [stage, profile, plans, activePlan, memories, diary, weekly, lastSeenWeek, people, family, countdowns, letters, navTabs, theme, dark, lang, account]);
 
   const resetAll = async () => {
     await clearState();
     setProfile({ name: "", birth: "", lifeExp: 73, focus: [], intention: "" });
     setPlans([{ id: 1, name: "Plan A", steps: [] }]);
     setActivePlan(1);
-    setMemories([]); setDiary([]); setWeekly({}); setPeople([]); setCountdowns([]); setLetters([]);
+    setMemories([]); setDiary([]); setWeekly({}); setPeople([]); setFamily([]); setCountdowns([]); setLetters([]);
     setNavTabsRaw([...DEFAULT_NAV]);
     setAccount(null);
     setStage("auth");
@@ -404,6 +408,7 @@ export default function KalaApp() {
           weekly={weekly} setWeekly={setWeekly}
           lastSeenWeek={lastSeenWeek} setLastSeenWeek={setLastSeenWeek}
           people={people} setPeople={setPeople}
+          family={family} setFamily={setFamily}
           countdowns={countdowns} setCountdowns={setCountdowns}
           letters={letters} setLetters={setLetters}
           navTabs={navTabs} setNavTabs={setNavTabs}
@@ -1015,7 +1020,7 @@ function Reveal({ profile, onDone }) {
 
 function Main({ profile, setProfile, plans, setPlans, activePlan, setActivePlan,
   memories, setMemories, diary, setDiary, weekly, setWeekly,
-  lastSeenWeek, setLastSeenWeek, people, setPeople, countdowns, setCountdowns,
+  lastSeenWeek, setLastSeenWeek, people, setPeople, family, setFamily, countdowns, setCountdowns,
   letters, setLetters,
   navTabs, setNavTabs, theme, setTheme, dark, setDark, lang, setLang, onReset }) {
   const [tab, setTab] = useState("life");
@@ -1032,7 +1037,7 @@ function Main({ profile, setProfile, plans, setPlans, activePlan, setActivePlan,
   // ---- export / import all data (trust & portability) ----
   const exportData = () => {
     const payload = { _app: "KALA", _v: 1, exportedAt: new Date().toISOString(),
-      profile, plans, activePlan, memories, diary, weekly, people, countdowns, letters, navTabs };
+      profile, plans, activePlan, memories, diary, weekly, people, family, countdowns, letters, navTabs };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -1050,6 +1055,7 @@ function Main({ profile, setProfile, plans, setPlans, activePlan, setActivePlan,
       if (d.diary) setDiary(d.diary);
       if (d.weekly) setWeekly(d.weekly);
       if (d.people) setPeople(d.people);
+      if (d.family) setFamily(d.family);
       if (d.countdowns) setCountdowns(d.countdowns);
       if (d.letters) setLetters(d.letters);
       if (d.navTabs) setNavTabs(d.navTabs);
@@ -1230,6 +1236,11 @@ function Main({ profile, setProfile, plans, setPlans, activePlan, setActivePlan,
         )}
         {tab === "people" && (
           <PeopleView people={people} setPeople={setPeople} lang={lang} />
+        )}
+        {tab === "family" && (
+          <FamilyView family={family} setFamily={setFamily}
+            people={people} setPeople={setPeople} profile={profile}
+            goToPeople={() => setTab("people")} lang={lang} />
         )}
         {tab === "memory" && (
           <MemoryView profile={profile} memories={memories} setMemories={setMemories} age={age} />
@@ -3661,6 +3672,542 @@ function AddPerson({ onAdd, onCancel }) {
       </div>
       <div style={{ display: "flex", gap: 8, marginTop: 18 }}>
         <Btn small onClick={submit} disabled={!valid}>See our time together</Btn>
+        {onCancel && <Btn small variant="ghost" onClick={onCancel}>Cancel</Btn>}
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// FAMILY TREE — your lineage, generation by generation
+// ------------------------------------------------------------
+// Members are linked by parent references (member.parents[]), so "where
+// someone descends from" is always explicit. Generations are derived from
+// those links: ancestors sit at the top, descendants flow downward. Each
+// member can be carried into "Time With" so a living relative also shows the
+// moments you likely have left together.
+// ============================================================
+
+// life expectancy for a member: an explicit value, else the role's default
+function memberLifeExp(m) {
+  return m.lifeExp || familyRole(m.role).defaultExp;
+}
+// compact "1948–2019" / "76 yrs" / "age unknown" line for a node
+function yearsText(m) {
+  const y = new Date().getFullYear();
+  if (m.deathYear != null) return `${m.birthYear ?? "?"}–${m.deathYear}`;
+  if (m.birthYear) return `${Math.max(0, y - m.birthYear)} yrs`;
+  return "age unknown";
+}
+
+function FamilyView({ family, setFamily, people, setPeople, profile, goToPeople, lang }) {
+  const [selectedId, setSelectedId] = useState(null);
+  const [mode, setMode] = useState(family.length === 0 ? "add" : null); // null | "add" | "edit"
+
+  const levels = useMemo(() => computeGenerations(family), [family]);
+  const generations = family.length ? Math.max(...family.map((m) => levels[m.id] ?? 0)) + 1 : 0;
+  const living = family.filter((m) => m.deathYear == null).length;
+  const passed = family.length - living;
+
+  const addMember = (m, alsoTrack) => {
+    setFamily([...family, m]);
+    setMode(null);
+    setSelectedId(m.id);
+    if (alsoTrack) trackInTimeWith(m);
+  };
+  const updateMember = (id, patch) =>
+    setFamily(family.map((m) => (m.id === id ? { ...m, ...patch } : m)));
+  const removeMember = (id) => {
+    setFamily(
+      family
+        .filter((m) => m.id !== id)
+        .map((m) => (m.parents?.includes(id) ? { ...m, parents: m.parents.filter((p) => p !== id) } : m))
+    );
+    if (selectedId === id) setSelectedId(null);
+  };
+
+  // ---- Time With integration: carry a living relative into the people list ----
+  const trackInTimeWith = (m) => {
+    const twKey = familyRole(m.role).timeWith || "other";
+    const rel = RELATIONS.find((r) => r.key === twKey) || RELATIONS[6];
+    const y = new Date().getFullYear();
+    const theirAge = m.birthYear ? Math.max(0, y - m.birthYear) : Math.round(rel.defaultExp / 2);
+    const exp = Math.max(theirAge + 1, memberLifeExp(m));
+    const pid = Date.now();
+    setPeople([...people, { id: pid, name: m.name, relation: rel.key, theirAge,
+      theirLifeExp: exp, perYear: 6, familyId: m.id }]);
+    updateMember(m.id, { linkedPersonId: pid });
+  };
+
+  const selected = family.find((m) => m.id === selectedId) || null;
+  const editing = mode === "edit" ? selected : null;
+
+  return (
+    <div>
+      <Card>
+        <Eyebrow>Family tree</Eyebrow>
+        <h2 style={{ fontFamily: "'Fraunces',serif", fontWeight: 500,
+          fontSize: "clamp(22px,4vw,30px)", lineHeight: 1.2, letterSpacing: "-.01em",
+          margin: "10px 0 8px" }}>
+          Every life here<br /><em style={{ fontStyle: "italic", color: C.clay }}>came from another.</em>
+        </h2>
+        <p style={{ color: C.soilSoft, fontSize: 15, lineHeight: 1.6 }}>
+          Record who you descend from and who descends from you — and watch the
+          generations line up. Each person carries a life in weeks of their own.
+        </p>
+
+        {family.length > 0 && (
+          <div style={{ display: "flex", gap: 26, marginTop: 22, flexWrap: "wrap" }}>
+            <Stat n={generations} l="generations" accent />
+            <Stat n={family.length} l="people" />
+            <Stat n={living} l="living" />
+            {passed > 0 && <Stat n={passed} l="remembered" />}
+          </div>
+        )}
+      </Card>
+
+      {/* the tree */}
+      {family.length > 0 && (
+        <div className="kCard" style={cardStyle({ marginTop: 16, padding: "20px 16px" })}>
+          <FamilyTree family={family} levels={levels} selectedId={selectedId}
+            onSelect={(id) => { setSelectedId(id); setMode(null); }} />
+        </div>
+      )}
+
+      {/* add / edit form */}
+      {mode ? (
+        <AddFamilyMember
+          initial={editing}
+          family={family}
+          profile={profile}
+          onSave={(m, alsoTrack) => {
+            if (editing) { updateMember(editing.id, m); setMode(null); }
+            else addMember(m, alsoTrack);
+          }}
+          onCancel={family.length > 0 ? () => setMode(null) : null}
+        />
+      ) : selected ? (
+        <MemberDetail
+          member={selected}
+          family={family}
+          people={people}
+          onEdit={() => setMode("edit")}
+          onRemove={() => removeMember(selected.id)}
+          onClose={() => setSelectedId(null)}
+          onNote={(note) => updateMember(selected.id, { note })}
+          onTrack={() => trackInTimeWith(selected)}
+          goToPeople={goToPeople}
+        />
+      ) : (
+        family.length === 0 ? (
+          <EmptyState
+            title="Start with one person"
+            body="Add yourself, a parent, or a grandparent — then connect the rest. The tree builds itself from there."
+            action={<Btn onClick={() => setMode("add")}>+ Add the first person</Btn>}
+          />
+        ) : (
+          <div style={{ marginTop: 16, display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <Btn onClick={() => { setSelectedId(null); setMode("add"); }}>+ Add a family member</Btn>
+            <span style={{ fontSize: 12.5, color: C.soilSoft, alignSelf: "center" }}>
+              Tap anyone in the tree to see their life and story.
+            </span>
+          </div>
+        )
+      )}
+
+      {family.length > 0 && (
+        <p style={{ fontSize: 12.5, color: C.soilSoft, marginTop: 24, lineHeight: 1.6,
+          textAlign: "center", maxWidth: 460, marginLeft: "auto", marginRight: "auto" }}>
+          A family tree is a way to keep stories from being lost. Add a note to anyone —
+          a memory, a lesson, a message — and it stays here for the generations after you.
+        </p>
+      )}
+    </div>
+  );
+}
+
+// The diagram: generations stacked top→bottom, with SVG curves drawn from each
+// parent down to each child. Positions are measured from the DOM so the lines
+// stay correct as the layout reflows or the user scrolls a wide tree.
+function FamilyTree({ family, levels, selectedId, onSelect }) {
+  const wrapRef = useRef(null);
+  const nodeRefs = useRef({});
+  const [lines, setLines] = useState([]);
+  const [size, setSize] = useState({ w: 0, h: 0 });
+
+  const maxLevel = family.length ? Math.max(...family.map((m) => levels[m.id] ?? 0)) : 0;
+  const rows = [];
+  for (let l = 0; l <= maxLevel; l++) {
+    rows.push(
+      family
+        .filter((m) => (levels[m.id] ?? 0) === l)
+        .sort((a, b) => (a.birthYear || 9999) - (b.birthYear || 9999))
+    );
+  }
+
+  const measure = () => {
+    const wrap = wrapRef.current;
+    if (!wrap) return;
+    const cRect = wrap.getBoundingClientRect();
+    const pos = {};
+    family.forEach((m) => {
+      const el = nodeRefs.current[m.id];
+      if (!el) return;
+      const r = el.getBoundingClientRect();
+      const left = r.left - cRect.left + wrap.scrollLeft;
+      const top = r.top - cRect.top + wrap.scrollTop;
+      pos[m.id] = { cx: left + r.width / 2, top, bottom: top + r.height };
+    });
+    const ls = [];
+    family.forEach((m) => {
+      (m.parents || []).forEach((pid) => {
+        if (pos[pid] && pos[m.id]) {
+          ls.push({ key: pid + "-" + m.id,
+            x1: pos[pid].cx, y1: pos[pid].bottom, x2: pos[m.id].cx, y2: pos[m.id].top });
+        }
+      });
+    });
+    setLines(ls);
+    setSize({ w: wrap.scrollWidth, h: wrap.scrollHeight });
+  };
+
+  useLayoutEffect(() => {
+    measure();
+    const ro = new ResizeObserver(() => measure());
+    if (wrapRef.current) ro.observe(wrapRef.current);
+    window.addEventListener("resize", measure);
+    return () => { ro.disconnect(); window.removeEventListener("resize", measure); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [family, selectedId]);
+
+  return (
+    <div ref={wrapRef} style={{ position: "relative", overflowX: "auto", paddingBottom: 6 }}>
+      <svg width={size.w} height={size.h}
+        style={{ position: "absolute", top: 0, left: 0, pointerEvents: "none", overflow: "visible" }}>
+        {lines.map((l) => {
+          const midY = (l.y1 + l.y2) / 2;
+          const d = `M ${l.x1} ${l.y1} C ${l.x1} ${midY}, ${l.x2} ${midY}, ${l.x2} ${l.y2}`;
+          return <path key={l.key} d={d} fill="none" stroke={C.line} strokeWidth={2} />;
+        })}
+      </svg>
+      <div style={{ position: "relative", display: "flex", flexDirection: "column",
+        gap: 38, minWidth: "min-content", padding: "4px 6px 0" }}>
+        {rows.map((row, i) => (
+          <div key={i} style={{ display: "flex", gap: 16, justifyContent: "center", minWidth: "min-content" }}>
+            {row.map((m) => (
+              <div key={m.id} ref={(el) => (nodeRefs.current[m.id] = el)}>
+                <FamilyNode member={m} selected={selectedId === m.id} onSelect={() => onSelect(m.id)} />
+              </div>
+            ))}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function FamilyNode({ member, selected, onSelect }) {
+  const role = familyRole(member.role);
+  const passed = member.deathYear != null;
+  const accent = member.role === "self" ? C.clay : member.role === "partner" ? C.rose
+    : passed ? C.soilSoft : C.sage;
+  return (
+    <button onClick={onSelect} className="kBtn" style={{
+      width: 134, textAlign: "center", cursor: "pointer", fontFamily: "inherit",
+      background: selected ? C.card : C.paper,
+      border: `1.5px solid ${selected ? C.clay : C.line}`,
+      borderRadius: 14, padding: "12px 10px",
+      boxShadow: selected ? `0 0 0 3px ${C.clay}22` : "0 10px 24px -20px rgba(46,32,24,.5)",
+      opacity: passed ? 0.88 : 1 }}>
+      <div style={{ fontSize: 18, color: accent, marginBottom: 2 }}>{role.icon}</div>
+      <div style={{ fontFamily: "'Fraunces',serif", fontWeight: 600, fontSize: 15, color: C.soil,
+        lineHeight: 1.2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+        {member.name}
+      </div>
+      <div style={{ fontSize: 11, color: C.soilSoft, marginTop: 3 }}>
+        {member.role === "self" ? "You" : role.label}
+      </div>
+      <div style={{ fontSize: 11, color: C.soilSoft, marginTop: 2 }}>{yearsText(member)}</div>
+      {passed && <div style={{ fontSize: 10, color: C.soilSoft, marginTop: 3, fontStyle: "italic" }}>in memory</div>}
+    </button>
+  );
+}
+
+function MemberDetail({ member, family, people, onEdit, onRemove, onClose, onNote, onTrack, goToPeople }) {
+  const role = familyRole(member.role);
+  const passed = member.deathYear != null;
+  const parents = (member.parents || [])
+    .map((id) => family.find((m) => m.id === id)).filter(Boolean);
+  const children = family.filter((m) => (m.parents || []).includes(member.id));
+  const linked = member.linkedPersonId
+    ? people.find((p) => p.id === member.linkedPersonId)
+    : null;
+  const firstName = member.name.split(" ")[0];
+
+  return (
+    <div className="kCard kFadeUp" style={cardStyle({ marginTop: 16 })}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+        <div>
+          <div style={{ fontSize: 22, color: member.role === "partner" ? C.rose : C.clay, marginBottom: 4 }}>
+            {role.icon}
+          </div>
+          <h3 style={{ fontFamily: "'Fraunces',serif", fontWeight: 600, fontSize: 23 }}>{member.name}</h3>
+          <div style={{ fontSize: 12.5, color: C.soilSoft, marginTop: 2 }}>
+            {member.role === "self" ? "You" : role.label} · {yearsText(member)}
+          </div>
+        </div>
+        <button onClick={onClose} className="kBtn" style={{ background: "transparent", border: "none",
+          color: C.soilSoft, cursor: "pointer", fontSize: 18, opacity: 0.5, padding: "0 4px" }}>×</button>
+      </div>
+
+      {/* lineage */}
+      <div style={{ marginTop: 16, fontSize: 13.5, color: C.soil, lineHeight: 1.7 }}>
+        <div>
+          <span style={{ color: C.soilSoft }}>Descends from: </span>
+          {parents.length ? parents.map((p) => p.name).join(" & ") : <em style={{ color: C.soilSoft }}>not recorded</em>}
+        </div>
+        {children.length > 0 && (
+          <div>
+            <span style={{ color: C.soilSoft }}>Continues through: </span>
+            {children.map((c) => c.name).join(", ")}
+          </div>
+        )}
+      </div>
+
+      {/* life in weeks */}
+      <div style={{ marginTop: 18, paddingTop: 18, borderTop: `1px solid ${C.line}` }}>
+        <LifeInWeeksMini member={member} />
+      </div>
+
+      {/* note / legacy */}
+      <div style={{ marginTop: 18 }}>
+        <Label>{passed ? "In memory of them" : `A note about ${firstName}`}</Label>
+        <Textarea value={member.note || ""} onChange={(e) => onNote(e.target.value)}
+          placeholder={passed
+            ? "What do you want the next generation to remember about them?"
+            : "A story, a lesson, a message to keep…"}
+          style={{ minHeight: 70 }} />
+      </div>
+
+      {/* Time With integration */}
+      {!passed && member.role !== "self" && (
+        <div style={{ marginTop: 16 }}>
+          {linked ? (
+            <button onClick={goToPeople} className="kBtn" style={{ background: "transparent",
+              border: `1px solid ${C.line}`, borderRadius: 99, padding: "9px 16px", cursor: "pointer",
+              fontFamily: "inherit", fontSize: 13, fontWeight: 600, color: C.clay }}>
+              ✓ Tracked in Time With — open →
+            </button>
+          ) : (
+            <Btn small variant="ghost" onClick={onTrack}>♡ Track our time together</Btn>
+          )}
+        </div>
+      )}
+
+      <div style={{ display: "flex", gap: 8, marginTop: 20, borderTop: `1px solid ${C.line}`, paddingTop: 16 }}>
+        <Btn small onClick={onEdit}>Edit</Btn>
+        <Btn small variant="ghost" onClick={onRemove}>Remove</Btn>
+      </div>
+    </div>
+  );
+}
+
+// One dot per year of life; filled dots are years already lived. For someone
+// who has passed, the whole life is shown, gently muted.
+function LifeInWeeksMini({ member }) {
+  const yNow = new Date().getFullYear();
+  const passed = member.deathYear != null;
+  const exp = memberLifeExp(member);
+  if (!member.birthYear) {
+    return <p style={{ fontSize: 13, color: C.soilSoft, lineHeight: 1.6 }}>
+      Add a birth year to see {member.name.split(" ")[0]}'s life in weeks.
+    </p>;
+  }
+  const livedYears = Math.max(0, (passed ? member.deathYear : yNow) - member.birthYear);
+  const totalYears = passed ? Math.max(1, livedYears) : Math.max(exp, livedYears + 1);
+  const livedWeeks = Math.round(livedYears * 52);
+  const remainWeeks = Math.max(0, Math.round((totalYears - livedYears) * 52));
+  const dotCount = Math.min(totalYears, 100);
+  const fillRatio = totalYears ? livedYears / totalYears : 1;
+  const dotColor = passed ? C.soilSoft : C.sage;
+
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
+        <span style={{ fontFamily: "'Fraunces',serif", fontWeight: 600, fontSize: 38,
+          color: passed ? C.soil : C.clay, lineHeight: 1 }}>
+          {fmt(passed ? livedWeeks : remainWeeks)}
+        </span>
+        <span style={{ fontSize: 14, color: C.soil }}>
+          {passed ? "weeks lived" : "weeks may remain"}
+        </span>
+      </div>
+      <p style={{ fontSize: 13, color: C.soilSoft, marginTop: 6, lineHeight: 1.5 }}>
+        {passed
+          ? `A life of ${livedYears} years.`
+          : `${fmt(livedWeeks)} weeks lived so far, of an estimated ${fmt(Math.round(totalYears * 52))}.`}
+      </p>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 14 }}>
+        {Array.from({ length: dotCount }).map((_, i) => {
+          const filled = i / dotCount < fillRatio;
+          return <span key={i} style={{ width: 9, height: 9, borderRadius: 2,
+            background: filled ? dotColor : "transparent",
+            border: filled ? "none" : `1px solid ${C.line}`,
+            opacity: filled ? (passed ? 0.6 : 0.85) : 1 }} />;
+        })}
+      </div>
+    </div>
+  );
+}
+
+function AddFamilyMember({ initial, family, profile, onSave, onCancel }) {
+  const editing = !!initial;
+  const hasSelf = family.some((m) => m.role === "self" && m.id !== initial?.id);
+  const [name, setName] = useState(initial?.name || "");
+  const [role, setRole] = useState(initial?.role || (hasSelf ? "parent" : "self"));
+  const [birthYear, setBirthYear] = useState(initial?.birthYear ? String(initial.birthYear) : "");
+  const [alive, setAlive] = useState(initial ? initial.deathYear == null : true);
+  const [deathYear, setDeathYear] = useState(initial?.deathYear ? String(initial.deathYear) : "");
+  const [parents, setParents] = useState(initial?.parents || []);
+  const [note, setNote] = useState(initial?.note || "");
+  const [alsoTrack, setAlsoTrack] = useState(false);
+
+  // adding yourself? borrow what KALA already knows from your profile
+  useEffect(() => {
+    if (editing || role !== "self") return;
+    if (!name && profile?.name) setName(profile.name);
+    if (!birthYear && profile?.birth) {
+      const y = new Date(profile.birth).getFullYear();
+      if (y) setBirthYear(String(y));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [role]);
+
+  const yNow = new Date().getFullYear();
+  const roleOptions = FAMILY_ROLES.filter((r) => r.key !== "self" || !hasSelf || initial?.role === "self");
+  const candidates = family.filter((m) => m.id !== initial?.id);
+  const toggleParent = (id) => setParents((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
+
+  const byInt = (v) => (v ? parseInt(v, 10) : null);
+  const valid =
+    name.trim() &&
+    (!birthYear || (byInt(birthYear) > 1000 && byInt(birthYear) <= yNow)) &&
+    (alive || !deathYear || (byInt(deathYear) >= (byInt(birthYear) || 0) && byInt(deathYear) <= yNow + 1));
+
+  const submit = () => {
+    if (!valid) return;
+    const roleDef = familyRole(role);
+    const base = {
+      name: name.trim(),
+      role,
+      birthYear: byInt(birthYear),
+      deathYear: alive ? null : byInt(deathYear),
+      lifeExp: role === "self" && profile?.lifeExp ? profile.lifeExp : roleDef.defaultExp,
+      parents,
+      note: note.trim(),
+    };
+    if (editing) onSave({ ...initial, ...base });
+    else onSave({ id: Date.now(), linkedPersonId: null, ...base }, alsoTrack && alive);
+  };
+
+  return (
+    <div className="kCard kFadeUp" style={cardStyle({ marginTop: 16 })}>
+      <h3 style={{ fontFamily: "'Fraunces',serif", fontWeight: 500, fontSize: 19, marginBottom: 16 }}>
+        {editing ? "Edit family member" : "Add a family member"}
+      </h3>
+      <div style={{ display: "grid", gap: 14 }}>
+        <div>
+          <Label>Their name</Label>
+          <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Kakek Hadi, Ibu, you" />
+        </div>
+
+        <div>
+          <Label>Who are they?</Label>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+            {roleOptions.map((r) => (
+              <button key={r.key} onClick={() => setRole(r.key)} className="kBtn"
+                style={{ padding: "8px 14px", borderRadius: 99, fontFamily: "inherit", fontSize: 13,
+                  fontWeight: 600, cursor: "pointer",
+                  border: `1px solid ${role === r.key ? C.clay : C.line}`,
+                  background: role === r.key ? C.clay : "transparent",
+                  color: role === r.key ? C.paper : C.soilSoft }}>
+                {r.icon} {r.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+          <div style={{ flex: 1, minWidth: 130 }}>
+            <Label>Birth year</Label>
+            <Input type="number" value={birthYear} min={1850} max={yNow}
+              onChange={(e) => setBirthYear(e.target.value)} placeholder="e.g. 1958" />
+          </div>
+          <div style={{ flex: 1, minWidth: 130 }}>
+            <Label>Status</Label>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button onClick={() => setAlive(true)} className="kBtn"
+                style={{ flex: 1, padding: "12px 0", borderRadius: 12, fontFamily: "inherit", fontSize: 13,
+                  fontWeight: 600, cursor: "pointer",
+                  border: `1px solid ${alive ? C.clay : C.line}`,
+                  background: alive ? C.clay : "transparent", color: alive ? C.paper : C.soilSoft }}>
+                Living
+              </button>
+              <button onClick={() => setAlive(false)} className="kBtn"
+                style={{ flex: 1, padding: "12px 0", borderRadius: 12, fontFamily: "inherit", fontSize: 13,
+                  fontWeight: 600, cursor: "pointer",
+                  border: `1px solid ${!alive ? C.clay : C.line}`,
+                  background: !alive ? C.clay : "transparent", color: !alive ? C.paper : C.soilSoft }}>
+                Passed
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {!alive && (
+          <div>
+            <Label>Year they passed</Label>
+            <Input type="number" value={deathYear} min={1850} max={yNow + 1}
+              onChange={(e) => setDeathYear(e.target.value)} placeholder="e.g. 2019" />
+          </div>
+        )}
+
+        {candidates.length > 0 && (
+          <div>
+            <Label>Whose child are they? <span style={{ fontWeight: 400 }}>(pick their parents)</span></Label>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+              {candidates.map((m) => (
+                <button key={m.id} onClick={() => toggleParent(m.id)} className="kBtn"
+                  style={{ padding: "8px 13px", borderRadius: 99, fontFamily: "inherit", fontSize: 12.5,
+                    fontWeight: 600, cursor: "pointer",
+                    border: `1px solid ${parents.includes(m.id) ? C.clay : C.line}`,
+                    background: parents.includes(m.id) ? C.clay : "transparent",
+                    color: parents.includes(m.id) ? C.paper : C.soilSoft }}>
+                  {familyRole(m.role).icon} {m.name}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div>
+          <Label>A note <span style={{ fontWeight: 400 }}>(optional)</span></Label>
+          <Textarea value={note} onChange={(e) => setNote(e.target.value)}
+            placeholder="A memory, a story, a message for those who come after…" style={{ minHeight: 60 }} />
+        </div>
+
+        {!editing && alive && role !== "self" && (
+          <label style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 13.5,
+            color: C.soil, cursor: "pointer" }}>
+            <input type="checkbox" checked={alsoTrack} onChange={(e) => setAlsoTrack(e.target.checked)}
+              style={{ width: 16, height: 16, accentColor: C.clay }} />
+            Also track our time together in “Time With”
+          </label>
+        )}
+      </div>
+
+      <div style={{ display: "flex", gap: 8, marginTop: 18 }}>
+        <Btn small onClick={submit} disabled={!valid}>{editing ? "Save changes" : "Add to tree"}</Btn>
         {onCancel && <Btn small variant="ghost" onClick={onCancel}>Cancel</Btn>}
       </div>
     </div>
