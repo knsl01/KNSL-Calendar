@@ -3913,7 +3913,7 @@ function FamilyView({ family, setFamily, people, setPeople, profile, goToPeople,
 // The diagram: every member is placed at a computed x/y so ancestors sit
 // directly above their own children, and soft curves fall from each couple
 // down to each child (a marriage bar joins partners).
-function FamilyTree({ family, selectedId, onSelect, big }) {
+function FamilyTree({ family, selectedId, onSelect, big, scale = 1 }) {
   const layout = useMemo(() => computeTreeLayout(family), [family]);
   const { positions: P, width, height, nodeW, nodeH } = layout;
 
@@ -3949,32 +3949,55 @@ function FamilyTree({ family, selectedId, onSelect, big }) {
 
   return (
     <div style={{ position: "relative", overflow: "auto", maxHeight: big ? "none" : 560 }}>
-      <div style={{ position: "relative", width, height, minWidth: "100%" }}>
-        <svg width={width} height={height}
-          style={{ position: "absolute", top: 0, left: 0, pointerEvents: "none" }}>
-          {curves.map((c) => (
-            <path key={c.key} d={c.d} fill="none" stroke={C.clay} strokeOpacity={0.5} strokeWidth={2} />
-          ))}
-          {bars.map((b) => (
-            <line key={b.key} x1={b.x1} y1={b.y} x2={b.x2} y2={b.y}
-              stroke={C.rose} strokeOpacity={0.6} strokeWidth={2} strokeLinecap="round" />
-          ))}
-        </svg>
-        {family.map((m) =>
-          P[m.id] ? (
-            <div key={m.id} style={{ position: "absolute", width: nodeW, height: nodeH,
-              left: P[m.id].x - nodeW / 2, top: P[m.id].y }}>
-              <FamilyNode member={m} selected={selectedId === m.id} onSelect={() => onSelect(m.id)} />
-            </div>
-          ) : null
-        )}
+      <div style={{ width: width * scale, height: height * scale, minWidth: "100%" }}>
+        <div style={{ position: "relative", width, height,
+          transform: `scale(${scale})`, transformOrigin: "top left" }}>
+          <svg width={width} height={height}
+            style={{ position: "absolute", top: 0, left: 0, pointerEvents: "none" }}>
+            {curves.map((c) => (
+              <path key={c.key} d={c.d} fill="none" stroke={C.clay} strokeOpacity={0.5} strokeWidth={2} />
+            ))}
+            {bars.map((b) => (
+              <line key={b.key} x1={b.x1} y1={b.y} x2={b.x2} y2={b.y}
+                stroke={C.rose} strokeOpacity={0.6} strokeWidth={2} strokeLinecap="round" />
+            ))}
+          </svg>
+          {family.map((m) =>
+            P[m.id] ? (
+              <div key={m.id} style={{ position: "absolute", width: nodeW, height: nodeH,
+                left: P[m.id].x - nodeW / 2, top: P[m.id].y }}>
+                <FamilyNode member={m} selected={selectedId === m.id} onSelect={() => onSelect(m.id)} />
+              </div>
+            ) : null
+          )}
+        </div>
       </div>
     </div>
   );
 }
 
-// Fullscreen silsilah — a focused, scrollable view of the whole tree.
+// Fullscreen silsilah — a focused, zoomable, scrollable view of the whole tree.
 function FamilyTreeModal({ family, selectedId, onSelect, onClose, lang }) {
+  const [scale, setScale] = useState(1);
+  const stageRef = useRef(null);
+  const clamp = (z) => Math.min(2, Math.max(0.25, Math.round(z * 100) / 100));
+  const zoomBy = (d) => setScale((z) => clamp(z + d));
+  const fit = () => {
+    const stage = stageRef.current;
+    if (!stage) return setScale(1);
+    const { width, height } = computeTreeLayout(family);
+    const z = Math.min((stage.clientWidth - 32) / width, (stage.clientHeight - 32) / height, 1);
+    setScale(clamp(z > 0 ? z : 1));
+  };
+  // start zoomed to fit
+  useEffect(() => { fit(); /* eslint-disable-next-line */ }, []);
+
+  const zBtn = {
+    width: 38, height: 38, borderRadius: 12, border: `1px solid ${C.line}`, background: C.paper,
+    color: C.soil, cursor: "pointer", fontFamily: "inherit", fontSize: 18, fontWeight: 600,
+    display: "flex", alignItems: "center", justifyContent: "center", lineHeight: 1,
+  };
+
   return (
     <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 60,
       background: "rgba(20,14,9,.55)", backdropFilter: "blur(3px)",
@@ -3992,8 +4015,22 @@ function FamilyTreeModal({ family, selectedId, onSelect, onClose, lang }) {
             {tr("Close", lang)} ×
           </button>
         </div>
-        <div style={{ flex: 1, overflow: "auto", padding: "24px 16px" }}>
-          <FamilyTree family={family} selectedId={selectedId} onSelect={onSelect} big />
+        <div ref={stageRef} style={{ flex: 1, overflow: "auto", padding: "24px 16px", position: "relative" }}>
+          <FamilyTree family={family} selectedId={selectedId} onSelect={onSelect} big scale={scale} />
+        </div>
+        {/* zoom controls */}
+        <div style={{ position: "absolute", bottom: 22, left: "50%", transform: "translateX(-50%)",
+          display: "flex", alignItems: "center", gap: 8, background: C.paper,
+          border: `1px solid ${C.line}`, borderRadius: 99, padding: "6px 8px",
+          boxShadow: "0 14px 34px -18px rgba(46,32,24,.6)" }}>
+          <button onClick={() => zoomBy(-0.15)} className="kBtn" style={zBtn} aria-label="Zoom out">−</button>
+          <div style={{ minWidth: 46, textAlign: "center", fontSize: 13, fontWeight: 600,
+            color: C.soilSoft, fontVariantNumeric: "tabular-nums" }}>
+            {Math.round(scale * 100)}%
+          </div>
+          <button onClick={() => zoomBy(0.15)} className="kBtn" style={zBtn} aria-label="Zoom in">+</button>
+          <button onClick={fit} className="kBtn" style={{ ...zBtn, width: "auto", padding: "0 14px",
+            fontSize: 13 }}>{tr("Fit", lang)}</button>
         </div>
       </div>
     </div>
@@ -4421,41 +4458,69 @@ function roundRectPath(ctx, x, y, w, h, r) {
 }
 
 // Render the whole family tree to a shareable PNG, themed to the current
-// palette — mirrors the way Wrapped exports its card.
+// palette — a soft gradient, generation bands, shadowed cards and a footer,
+// so it looks like a keepsake rather than a screenshot.
 function renderFamilyTreeImage(family, profile, palette) {
   return new Promise((resolve, reject) => {
     const Cx = palette;
-    const { positions: P, width: w, height: h, nodeW, nodeH } = computeTreeLayout(family);
-    const SCALE = 2, TOP = 150, BOTTOM = 92, SIDE = 24;
-    const W = Math.max(760, w + SIDE * 2);
+    const { positions: P, width: w, height: h, nodeW, nodeH, levels } = computeTreeLayout(family);
+    const SCALE = 2, TOP = 184, BOTTOM = 120, SIDE = 40;
+    const W = Math.max(820, w + SIDE * 2);
+    const ox = (W - w) / 2, oy = TOP;
     const H = h + TOP + BOTTOM;
+    const generations = family.length ? Math.max(...family.map((m) => levels[m.id] ?? 0)) + 1 : 0;
     const cv = document.createElement("canvas");
     cv.width = W * SCALE; cv.height = H * SCALE;
     const x = cv.getContext("2d");
     x.scale(SCALE, SCALE);
-    const ox = (W - w) / 2;
-    const oy = TOP;
     const clip = (s, n) => (s.length > n ? s.slice(0, n - 1) + "…" : s);
+    const hex = (c, a) => {
+      const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(c);
+      return m ? `rgba(${parseInt(m[1],16)},${parseInt(m[2],16)},${parseInt(m[3],16)},${a})` : c;
+    };
 
     const draw = () => {
-      x.fillStyle = Cx.bg; x.fillRect(0, 0, W, H);
+      // background gradient
+      const g = x.createLinearGradient(0, 0, 0, H);
+      g.addColorStop(0, Cx.bg); g.addColorStop(1, Cx.card || Cx.bg);
+      x.fillStyle = g; x.fillRect(0, 0, W, H);
+      // faint "weeks" dot grid, top-right
+      for (let r = 0; r < 6; r++) for (let c = 0; c < 9; c++) {
+        x.fillStyle = hex((r + c) % 4 === 0 ? Cx.clay : Cx.soilSoft, 0.10);
+        x.fillRect(W - 9 * 22 - 24 + c * 22, 34 + r * 22, 12, 12);
+      }
+
+      // generation bands (faint, alternating) for structure
+      const rowY = {};
+      family.forEach((m) => { if (P[m.id]) rowY[levels[m.id] ?? 0] = P[m.id].y + oy; });
+      Object.entries(rowY).forEach(([lv, y]) => {
+        x.fillStyle = hex(+lv % 2 ? Cx.sage : Cx.clay, 0.05);
+        roundRectPath(x, SIDE - 8, y - 14, W - (SIDE - 8) * 2, nodeH + 28, 16);
+        x.fill();
+      });
 
       // header
       x.textAlign = "left";
-      x.fillStyle = Cx.clay; x.font = "600 13px 'Jakarta', sans-serif";
-      x.fillText("FAMILY TREE", SIDE, 52);
-      x.fillStyle = Cx.soil; x.font = "500 30px 'Fraunces', serif";
-      x.fillText(profile?.name ? `${profile.name}’s lineage` : "Our lineage", SIDE, 92);
-      x.fillStyle = Cx.soilSoft; x.font = "400 14px 'Jakarta', sans-serif";
-      x.fillText(`${family.length} people · every life in weeks`, SIDE, 116);
+      // small glyph
+      const gx = SIDE, gy = 40, s = 7;
+      [0,0,0,0,1,2,2,2,2].forEach((v, i) => {
+        x.fillStyle = v === 0 ? Cx.past : v === 1 ? Cx.clay : hex(Cx.soilSoft, 0.35);
+        x.fillRect(gx + (i % 3) * (s + 3), gy + Math.floor(i / 3) * (s + 3), s, s);
+      });
+      x.fillStyle = Cx.clay; x.font = "600 14px 'Jakarta', sans-serif";
+      x.fillText("KALA · FAMILY TREE", gx + 42, gy + 18);
+      x.fillStyle = Cx.soil; x.font = "500 38px 'Fraunces', serif";
+      x.fillText(profile?.name ? `${profile.name}’s lineage` : "Our lineage", SIDE, 122);
+      x.fillStyle = Cx.soilSoft; x.font = "400 15px 'Jakarta', sans-serif";
+      x.fillText(`${family.length} people · ${generations} generations · every life in weeks`, SIDE, 150);
 
       // descent curves
-      x.strokeStyle = Cx.clay; x.lineWidth = 2; x.globalAlpha = 0.5;
+      x.strokeStyle = Cx.clay; x.lineWidth = 2.4; x.globalAlpha = 0.55;
       family.forEach((c) => {
         if (!P[c.id]) return;
         const ps = (c.parents || []).filter((p) => P[p]);
         if (!ps.length) return;
-        const ax = ps.reduce((s, p) => s + P[p].x, 0) / ps.length + ox;
+        const ax = ps.reduce((s2, p) => s2 + P[p].x, 0) / ps.length + ox;
         const ay = Math.max(...ps.map((p) => P[p].y)) + nodeH + oy;
         const cx = P[c.id].x + ox, cy = P[c.id].y + oy;
         const midY = (ay + cy) / 2;
@@ -4463,7 +4528,7 @@ function renderFamilyTreeImage(family, profile, palette) {
       });
 
       // marriage bars
-      x.strokeStyle = Cx.rose; x.globalAlpha = 0.6;
+      x.strokeStyle = Cx.rose; x.globalAlpha = 0.7; x.lineWidth = 2.4;
       const drawn = new Set();
       const marry = (a, b) => {
         if (!P[a] || !P[b]) return;
@@ -4480,42 +4545,53 @@ function renderFamilyTreeImage(family, profile, palette) {
       });
       x.globalAlpha = 1;
 
-      // node cards
+      // node cards (with a soft shadow)
       family.forEach((m) => {
         const p = P[m.id]; if (!p) return;
         const nx = p.x - nodeW / 2 + ox, ny = p.y + oy;
         const role = familyRole(m.role); const passed = m.deathYear != null;
-        x.globalAlpha = passed ? 0.9 : 1;
-        roundRectPath(x, nx, ny, nodeW, nodeH, 12);
-        x.fillStyle = Cx.paper; x.fill();
-        x.strokeStyle = Cx.line; x.lineWidth = 1.5; x.stroke();
-        const cx = nx + nodeW / 2;
         const accent = m.role === "self" ? Cx.clay : m.role === "partner" ? Cx.rose
           : passed ? Cx.soilSoft : Cx.sage;
+        x.globalAlpha = passed ? 0.92 : 1;
+        roundRectPath(x, nx, ny, nodeW, nodeH, 14);
+        x.shadowColor = "rgba(46,32,24,0.20)"; x.shadowBlur = 18; x.shadowOffsetY = 8;
+        x.fillStyle = Cx.paper; x.fill();
+        x.shadowColor = "transparent"; x.shadowBlur = 0; x.shadowOffsetY = 0;
+        // accent top edge
+        x.fillStyle = hex(accent, 0.9);
+        roundRectPath(x, nx, ny, nodeW, 5, 3); x.fill();
+        x.strokeStyle = Cx.line; x.lineWidth = 1.25; roundRectPath(x, nx, ny, nodeW, nodeH, 14); x.stroke();
+        const cx = nx + nodeW / 2;
         x.textAlign = "center";
-        x.fillStyle = accent; x.font = "18px 'Jakarta', sans-serif";
-        x.fillText(role.icon, cx, ny + 27);
-        x.fillStyle = Cx.soil; x.font = "600 15px 'Fraunces', serif";
-        x.fillText(clip(m.name, 15), cx, ny + 50);
+        x.fillStyle = accent; x.font = "19px 'Jakarta', sans-serif";
+        x.fillText(role.icon, cx, ny + 32);
+        x.fillStyle = Cx.soil; x.font = "600 16px 'Fraunces', serif";
+        x.fillText(clip(m.name, 15), cx, ny + 56);
         x.fillStyle = Cx.soilSoft; x.font = "400 11px 'Jakarta', sans-serif";
-        x.fillText(m.role === "self" ? "You" : role.label, cx, ny + 68);
-        x.fillText(yearsText(m), cx, ny + 84);
+        x.fillText(m.role === "self" ? "You" : role.label, cx, ny + 74);
+        x.fillText(yearsText(m), cx, ny + 90);
         x.globalAlpha = 1;
       });
 
       // footer
       x.textAlign = "left";
-      x.fillStyle = Cx.soilSoft; x.font = "600 12px 'Jakarta', sans-serif";
-      x.fillText("kala.knsl.tech · A product by KNSL", SIDE, H - 40);
+      x.strokeStyle = hex(Cx.soilSoft, 0.35); x.lineWidth = 1;
+      x.beginPath(); x.moveTo(SIDE, H - 64); x.lineTo(W - SIDE, H - 64); x.stroke();
+      x.fillStyle = Cx.soil; x.font = "italic 500 17px 'Fraunces', serif";
+      x.fillText("Every life here came from another.", SIDE, H - 36);
+      x.textAlign = "right";
+      x.fillStyle = Cx.soilSoft; x.font = "600 13px 'Jakarta', sans-serif";
+      x.fillText("kala.knsl.tech · A product by KNSL", W - SIDE, H - 36);
 
       cv.toBlob((b) => (b ? resolve(b) : reject(new Error("toBlob failed"))), "image/png");
     };
 
     if (document.fonts && document.fonts.ready) {
       Promise.all([
-        document.fonts.load("500 30px 'Fraunces'"),
-        document.fonts.load("600 15px 'Fraunces'"),
-        document.fonts.load("400 12px 'Jakarta'"),
+        document.fonts.load("500 38px 'Fraunces'"),
+        document.fonts.load("600 16px 'Fraunces'"),
+        document.fonts.load("italic 500 17px 'Fraunces'"),
+        document.fonts.load("400 13px 'Jakarta'"),
       ]).then(draw).catch(draw);
     } else draw();
   });
