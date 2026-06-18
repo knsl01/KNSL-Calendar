@@ -124,6 +124,37 @@ export function computeGenerations(members) {
   return memo;
 }
 
+// Build the rows of the tree, ordered so children sit under their parents.
+// Generation 0 (the eldest) is ordered by birth; every generation below is
+// ordered by the average position of each member's parents in the row above,
+// which keeps the connecting lines short and stops them crossing the diagram.
+export function layoutGenerations(members) {
+  const levels = computeGenerations(members);
+  const maxLevel = members.length ? Math.max(...members.map((m) => levels[m.id] ?? 0)) : -1;
+  const orderIndex = {}; // member id -> horizontal slot within its own row
+  const rows = [];
+  for (let l = 0; l <= maxLevel; l++) {
+    const row = members.filter((m) => (levels[m.id] ?? 0) === l);
+    if (l === 0) {
+      row.sort((a, b) => (a.birthYear || 9999) - (b.birthYear || 9999));
+    } else {
+      const key = (m) => {
+        const ps = (m.parents || []).filter((p) => orderIndex[p] != null);
+        if (!ps.length) return Number.POSITIVE_INFINITY; // unrooted → drift to the end
+        return ps.reduce((s, p) => s + orderIndex[p], 0) / ps.length;
+      };
+      row.sort((a, b) => {
+        const ka = key(a), kb = key(b);
+        if (ka !== kb) return ka - kb;
+        return (a.birthYear || 9999) - (b.birthYear || 9999);
+      });
+    }
+    row.forEach((m, i) => { orderIndex[m.id] = i; });
+    rows.push(row);
+  }
+  return { rows, levels };
+}
+
 export const WEEKLY_PROMPTS = [
   "What's one small thing you want to be true by next week?",
   "What mattered most to you this week?",
